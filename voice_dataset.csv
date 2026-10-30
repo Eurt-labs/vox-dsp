@@ -1,0 +1,2 @@
+Duration (s),Sampling Rate (Hz),RMS Energy,Zero Crossing Rate,Mean Pitch f0 (Hz),Pitch StdDev (Hz),Jitter (%),Shimmer (%),HNR (dB),Formant F1 (Hz),Formant F2 (Hz),Formant F3 (Hz),MFCC_0,MFCC_1,MFCC_2,MFCC_3,MFCC_4,MFCC_5,MFCC_6,MFCC_7,MFCC_8,MFCC_9,MFCC_10,MFCC_11,MFCC_12,File
+6.59,16000,0.0191,0.1062,125.98,38.79,5.25,20.68,9.64,466.5,1451.1,3038.3,-405.21,90.75,17.29,40.93,-8.83,1.73,-28.35,-9.1,-9.33,-3.73,-14.97,-0.51,-6.06,voice.wav

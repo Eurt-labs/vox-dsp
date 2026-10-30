@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# IDE configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated outputs & exports (keep repository clean)
+output/
+results/
+reports/
+*.png
+*.jpg
+*.jpeg
+*.svg
+!assets/*.png
+!assets/*.jpg
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
