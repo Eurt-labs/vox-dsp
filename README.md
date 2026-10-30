@@ -80,7 +80,9 @@ Summary of quantitative metrics extracted from the test recording ($16\text{ kHz
 ├── FormatextviaLPC.py     # LPC spectral envelope & formant pole extraction
 ├── MFCCs.py               # 13 MFCCs with CMVN and dual-panel phonetic/energy plot
 ├── VoiceQuality.py        # Praat glottal stability metrics (Jitter, Shimmer, HNR)
-└── analyze_voice.py       # Master pipeline script aggregating all 25+ acoustic features
+├── analyze_voice.py       # Master pipeline script aggregating all 25+ acoustic features
+├── CSV.py                 # Multi-panel diagnostic visualizer & dataset exporter
+└── voice_dataset.csv      # Sample feature dataset export
 ```
 
 ---
