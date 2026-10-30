@@ -93,8 +93,8 @@ Clone the repository and install dependencies in a virtual environment:
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/Eurt-labs/vox-dsp.git
+cd vox-dsp
 
 # Create and activate a virtual environment
 python -m venv .venv
