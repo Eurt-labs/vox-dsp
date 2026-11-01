@@ -138,3 +138,4 @@ def extract_longest_voiced_segment(signal, fs, min_duration=0.35, frame_len=512,
     start_time = max(0.0, mid - 0.5)
     end_time = min(clip_dur, start_time + 1.0)
     return start_time, end_time, signal[int(start_time * fs) : int(end_time * fs)]
+

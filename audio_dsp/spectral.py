@@ -97,3 +97,4 @@ def compute_active_frame_dft(signal, fs, frame_len=512, target_time=None):
     peak_db = float(mag_db[peak_bin])
 
     return freqs, mag_db, peak_freq, peak_db, round(frame_time, 2)
+

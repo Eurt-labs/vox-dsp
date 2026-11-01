@@ -166,3 +166,4 @@ def glottal_inverse_filtering(signal, fs, lpc_coeffs=None, lpc_order=18):
     naq = max(0.01, min(0.35, float(naq * 1000.0)))  # Scaled to typical physiological scale
 
     return residual, round(naq, 3)
+

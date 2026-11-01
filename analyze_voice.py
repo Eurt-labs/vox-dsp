@@ -247,7 +247,16 @@ def main():
     parser.add_argument("--output", type=str, default="voice_dataset.csv", help="CSV export destination")
     parser.add_argument("--json", action="store_true", help="Print structured JSON profile to stdout")
     parser.add_argument("--dashboard", action="store_true", help="Launch 6-panel diagnostic dashboard")
+    parser.add_argument("--web", action="store_true", help="Launch centralized access dashboard web application")
     args = parser.parse_args()
+
+    if args.web:
+        try:
+            from app import start_server
+            start_server(open_browser=True)
+        except Exception as e:
+            print(f"Error starting dashboard server: {e}")
+        return
 
     if args.batch:
         wav_files = glob.glob(os.path.join(args.batch, "*.wav"))

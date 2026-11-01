@@ -94,6 +94,7 @@ vox-dsp/
 │   ├── biometrics.py                   # Praat Jitter, Shimmer, HNR, CPPS, and Inverse Filter
 │   └── diagnostic_engine.py           # Automated clinical thresholding & report synthesis
 ├── analyze_voice.py                    # Master CLI & feature extractor (single file or batch)
+├── app.py                              # Centralized access dashboard web application
 ├── dashboard.py                        # Unified 6-panel high-resolution visualizer
 ├── voice.wav                           # Benchmark test recording
 ├── voice_dataset.csv                   # Exported 60+ feature tabular dataset
@@ -129,7 +130,16 @@ pip install -r requirements.txt
 
 ## 6. Usage Guide
 
-### 1. Run Master Analysis
+### 1. Launch the Centralized Access Dashboard (Interactive Web UI)
+Start the zero-dependency browser-based control center:
+```bash
+python app.py
+# Or directly via the master CLI:
+python analyze_voice.py --web
+```
+This opens `http://localhost:8050` in your default browser, providing audio playback, real-time diagnostic execution, high-res 6-panel visualization, and an interactive dataset explorer.
+
+### 2. Run Master CLI Analysis
 Generate an automated clinical diagnostic report and append 60+ features to `voice_dataset.csv`:
 ```bash
 python analyze_voice.py

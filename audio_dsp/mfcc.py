@@ -76,3 +76,4 @@ def extract_mfcc_features(
         summary[f"MFCC_delta_{i}_mean"] = round(float(np.mean(active_deltas[i])), 2)
 
     return mfccs_raw, mfccs_norm, deltas, delta2, summary, times
+
