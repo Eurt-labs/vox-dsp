@@ -5,9 +5,11 @@ Zero-dependency HTTP server using Python's standard library.
 Features:
 - Minimalist Swiss/monochrome design with high data density
 - Live in-browser microphone recording & instant DSP analysis
-- Voice Recognition page: Record pre-written sentences & authenticate/identify speakers
+- Standalone downloadable plots for DFT, Spectrogram, Pitch, LPC, MFCCs, Vowel Space, and Glottal Source
+- Raw DFT numerical data export (CSV)
+- Complete one-click ZIP bundle export of all plots and reports
+- Voice Recognition studio: Record pre-written sentences & authenticate/identify speakers
 - Acoustic Info Guide: Complete plain-language explanations of all numbers and metrics
-- Tabular dataset explorer & 6-panel high-resolution visualizer
 """
 
 import os
@@ -23,7 +25,17 @@ import numpy as np
 
 from analyze_voice import analyze_audio_signal, save_rows_to_csv, load_audio
 from audio_dsp.diagnostic_engine import generate_voice_diagnostic_report
-from dashboard import render_voice_dashboard
+from dashboard import (
+    render_voice_dashboard,
+    render_dft_plot,
+    render_spectrogram_plot,
+    render_pitch_plot,
+    render_lpc_plot,
+    render_mfcc_plot,
+    render_vowel_space_plot,
+    render_glottal_plot,
+    export_all_analyses_bundle,
+)
 
 from voice_recognition import (
     default_db,
@@ -101,6 +113,10 @@ HTML_CONTENT = """<!DOCTYPE html>
         <button id="btnAnalyze" onclick="triggerAnalyze()" class="bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs px-3 py-1 rounded transition">
           Analyze
         </button>
+        <a id="btnDownloadZipHeader" href="/api/export/zip?file=voice.wav" class="border border-zinc-700 hover:border-zinc-500 bg-zinc-900 text-xs px-2.5 py-1 rounded text-zinc-200 transition font-mono flex items-center gap-1">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+          ZIP Bundle
+        </a>
       </div>
     </div>
   </header>
@@ -143,13 +159,13 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
         <audio id="audioPlayer" controls class="h-7 w-72 rounded opacity-90"></audio>
         <div class="flex items-center space-x-2">
-          <label class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 px-2.5 py-1 rounded text-xs cursor-pointer">
+          <label class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 px-2.5 py-1 rounded text-xs cursor-pointer font-mono">
             Upload WAV
             <input type="file" id="fileUploadInput" accept=".wav" class="hidden" onchange="handleFileUpload(event)">
           </label>
-          <button onclick="renderDashboardImg()" class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 px-2.5 py-1 rounded text-xs">
-            View 6-Panel Plot
-          </button>
+          <a id="btnZipDownloadBanner" href="/api/export/zip?file=voice.wav" class="border border-zinc-800 hover:border-zinc-700 text-zinc-300 px-2.5 py-1 rounded text-xs font-mono">
+            Download All (ZIP)
+          </a>
         </div>
       </div>
     </div>
@@ -206,11 +222,14 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div class="max-w-6xl mx-auto px-4 space-y-4">
       <div class="border-b border-zinc-800">
         <nav class="flex space-x-6 text-xs font-mono uppercase tracking-wider">
-          <button onclick="switchDashTab('report')" id="tabBtn-report" class="py-2.5 nav-btn-active">
+          <button onclick="switchDashTab('plots')" id="tabBtn-plots" class="py-2.5 nav-btn-active">
+            DFT & Individual Analyses
+          </button>
+          <button onclick="switchDashTab('report')" id="tabBtn-report" class="py-2.5 text-zinc-500 hover:text-zinc-300">
             Clinical Evaluation
           </button>
           <button onclick="switchDashTab('visual')" id="tabBtn-visual" class="py-2.5 text-zinc-500 hover:text-zinc-300">
-            6-Panel Visualizer
+            6-Panel Composite
           </button>
           <button onclick="switchDashTab('dataset')" id="tabBtn-dataset" class="py-2.5 text-zinc-500 hover:text-zinc-300">
             Dataset Records (<span id="datasetCount">1</span>)
@@ -218,7 +237,54 @@ HTML_CONTENT = """<!DOCTYPE html>
         </nav>
       </div>
 
-      <div id="tabContent-report" class="space-y-4">
+      <!-- SUB-TAB 1: DFT & INDIVIDUAL PLOTS GALLERY (NEW) -->
+      <div id="tabContent-plots" class="space-y-4">
+        
+        <!-- Plot Selector Bar -->
+        <div class="card-surface rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center space-x-2">
+            <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">Select Analysis:</span>
+            <select id="analysisPlotSelect" onchange="updateSelectedPlot()" class="bg-zinc-950 border border-zinc-800 text-xs rounded px-2.5 py-1 text-zinc-200 font-mono">
+              <option value="dft">1. Discrete Fourier Transform (DFT) Magnitude Spectrum</option>
+              <option value="spectrogram">2. STFT Time-Frequency Spectrogram (0-4000 Hz)</option>
+              <option value="pitch">3. Fundamental Pitch (f0) Intonation Contour</option>
+              <option value="lpc">4. LPC Vocal Tract Filter Envelope vs FFT Harmonics</option>
+              <option value="mfcc">5. Normalized MFCCs (c1-c12) & Log Energy Contour</option>
+              <option value="vowel_space">6. Phonetic IPA Vowel Space Quadrilateral</option>
+              <option value="glottal">7. Glottal Flow Excitation Residual (Inverse Filter)</option>
+            </select>
+          </div>
+
+          <div class="flex items-center space-x-2">
+            <a id="btnDownloadCurrentPlot" href="/api/plot/dft?file=voice.wav&download=1" download class="border border-zinc-700 hover:border-zinc-500 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 font-mono flex items-center gap-1.5 transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+              Download Plot (PNG)
+            </a>
+            <a id="btnDownloadDftCsv" href="/api/data/dft_csv?file=voice.wav" download class="border border-zinc-700 hover:border-zinc-500 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 font-mono flex items-center gap-1.5 transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+              Download Raw DFT Data (CSV)
+            </a>
+          </div>
+        </div>
+
+        <!-- Plot Display Canvas -->
+        <div class="card-surface rounded-lg p-4 flex flex-col items-center space-y-3">
+          <div class="w-full flex justify-between items-center text-xs font-mono text-zinc-400">
+            <span id="plotTitleLabel">Discrete Fourier Transform (DFT) Magnitude Spectrum</span>
+            <span id="plotSubLabel" class="text-zinc-500">Target Vowel Slice | N=512 (32ms) Hann Window | fs=16kHz</span>
+          </div>
+          <div class="w-full border border-zinc-800 rounded bg-zinc-950 p-1 flex justify-center min-h-[300px] items-center">
+            <img id="activeAnalysisPlotImg" src="/api/plot/dft?file=voice.wav" alt="Analysis Plot" class="max-w-full h-auto rounded transition">
+          </div>
+          <p id="plotDescriptionText" class="text-xs text-zinc-400 w-full leading-relaxed border-t border-zinc-800/80 pt-2">
+            The DFT spectrum converts the stationary 32 ms windowed vowel frame into positive frequency bins. The prominent vertical red line marks the dominant glottal pitch harmonic, and gray dotted lines indicate upper integer multiples (2f0, 3f0, etc.). Raw frequency bins and decibel levels can be exported via the CSV button above.
+          </p>
+        </div>
+
+      </div>
+
+      <!-- SUB-TAB 2: CLINICAL REPORT -->
+      <div id="tabContent-report" class="hidden space-y-4">
         <div class="card-surface rounded-lg p-5 space-y-4">
           <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
             <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">ASHA & Praat Normative Evaluation</span>
@@ -250,18 +316,20 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- SUB-TAB 3: 6-PANEL COMPOSITE -->
       <div id="tabContent-visual" class="hidden space-y-3">
         <div class="card-surface rounded-lg p-4 flex flex-col items-center">
           <div class="w-full flex justify-between items-center mb-3">
-            <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">6-Panel High-Resolution Acoustic Dashboard</span>
-            <a href="/api/image?file=voice_dashboard.png" download class="border border-zinc-800 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 font-mono">Download PNG</a>
+            <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">6-Panel Composite Diagnostic Dashboard</span>
+            <a id="btnDownloadComposite" href="/api/plot/composite?file=voice.wav&download=1" download class="border border-zinc-800 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 font-mono">Download PNG</a>
           </div>
           <div class="w-full border border-zinc-800 rounded bg-zinc-950 p-1 flex justify-center">
-            <img id="dashboardImg" src="/api/image?file=voice_dashboard.png" alt="6-Panel Diagnostic Dashboard" class="max-w-full h-auto rounded">
+            <img id="dashboardImg" src="/api/plot/composite?file=voice.wav" alt="6-Panel Diagnostic Dashboard" class="max-w-full h-auto rounded">
           </div>
         </div>
       </div>
 
+      <!-- SUB-TAB 4: DATASET ARCHIVE -->
       <div id="tabContent-dataset" class="hidden space-y-3">
         <div class="card-surface rounded-lg p-4 space-y-3">
           <div class="flex justify-between items-center">
@@ -298,7 +366,6 @@ HTML_CONTENT = """<!DOCTYPE html>
   <!-- ============================================================== -->
   <div id="view-recognition" class="hidden flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
 
-    <!-- Top Card: Pre-Written Phonetic Sentence Prompt -->
     <div class="card-surface rounded-xl p-5 space-y-4">
       <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
         <div class="flex items-center space-x-2">
@@ -317,10 +384,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         <p id="promptFocus" class="text-[11px] text-zinc-500 font-mono mt-2">Phonetic Focus: Full consonant and vowel articulatory distribution</p>
       </div>
 
-      <!-- Action Panel: Recognize or Enroll -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        
-        <!-- Box A: Recognize Voice -->
+        <!-- Recognize Voice -->
         <div class="border border-zinc-800 rounded-lg p-4 bg-zinc-950/40 space-y-3 flex flex-col justify-between">
           <div>
             <div class="text-xs font-mono uppercase tracking-wider text-zinc-300 font-semibold mb-1">Mode 1: Recognize Voice</div>
@@ -335,7 +400,7 @@ HTML_CONTENT = """<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Box B: Enroll New Speaker -->
+        <!-- Enroll Speaker -->
         <div class="border border-zinc-800 rounded-lg p-4 bg-zinc-950/40 space-y-3">
           <div>
             <div class="text-xs font-mono uppercase tracking-wider text-zinc-300 font-semibold mb-1">Mode 2: Enroll New Speaker</div>
@@ -350,7 +415,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div id="enrollTimer" class="hidden text-center font-mono text-xs text-red-400 font-bold">REC 00:00</div>
           </div>
         </div>
-
       </div>
     </div>
 
@@ -373,7 +437,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Candidate Rankings Table -->
       <div>
         <div class="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">Candidate Comparison Rankings</div>
         <div class="overflow-x-auto border border-zinc-800 rounded">
@@ -420,22 +483,31 @@ HTML_CONTENT = """<!DOCTYPE html>
   <!-- VIEW 3: ACOUSTIC INFO GUIDE                                    -->
   <!-- ============================================================== -->
   <div id="view-info" class="hidden flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
-
     <div class="card-surface rounded-xl p-6 space-y-6">
       <div class="border-b border-zinc-800 pb-3">
         <h2 class="text-base font-bold text-zinc-100 uppercase tracking-wider font-mono">Acoustic Metrics & Biometrics Reference Guide</h2>
         <p class="text-xs text-zinc-400 mt-1">Detailed physical and clinical definitions of every metric, ratio, and threshold extracted by vox-dsp.</p>
       </div>
 
-      <!-- Section 1: Pitch & Glottal Source -->
       <div class="space-y-3">
         <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
-          01 / Glottal Fundamental Frequency ($f_0$) & Prosody
+          01 / Discrete Fourier Transform (DFT) & Spectral Decomposition
+        </div>
+        <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded text-xs leading-relaxed text-zinc-400 space-y-1.5">
+          <p><strong class="text-zinc-200">Discrete Fourier Transform (DFT):</strong> Converts a finite time-domain speech frame (N = 512 samples, 32.0 ms) into N/2 + 1 = 257 discrete positive frequency bins spaced at Δf = fs/N = 31.25 Hz.</p>
+          <p><strong class="text-zinc-200">Hann Windowing:</strong> Tapers the frame boundaries to zero using w[n] = 0.5 - 0.5 * cos(2πn / (N-1)), preventing artificial high-frequency spectral edge leakage.</p>
+          <p><strong class="text-zinc-200">Dominant Peak & Harmonics:</strong> In active voiced vowels, the dominant peak corresponds to either the fundamental glottal pulse frequency ($f_0$) or the first vocal tract formant resonance ($F_1$). Successive peaks appear at integer multiples ($2f_0, 3f_0, 4f_0$), forming the acoustic harmonic series.</p>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
+          02 / Glottal Fundamental Frequency ($f_0$) & Prosody
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs leading-relaxed text-zinc-400">
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">Fundamental Frequency ($f_0$):</strong>
-            The rate at which the vocal folds open and close per second (measured in Hertz). 
+            The rate at which the vocal folds open and close per second (measured in Hertz).
             <ul class="list-disc list-inside mt-1 text-zinc-400 space-y-0.5">
               <li><strong>Adult Male:</strong> 85 – 155 Hz (Sample speaker: ~117.1 Hz).</li>
               <li><strong>Adult Female:</strong> 165 – 255 Hz.</li>
@@ -444,7 +516,7 @@ HTML_CONTENT = """<!DOCTYPE html>
           </div>
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">Prosodic Pitch Range (Semitones):</strong>
-            The logarithmic pitch dynamic width: 12 * log2(f0_max / f0_min).
+            Logarithmic pitch dynamic width: 12 * log2(f0_max / f0_min).
             <ul class="list-disc list-inside mt-1 text-zinc-400 space-y-0.5">
               <li><strong>&lt; 3.0 semitones:</strong> Monotone, flat, or depressed speech delivery.</li>
               <li><strong>3.0 – 9.0 semitones:</strong> Typical conversational intonation.</li>
@@ -454,18 +526,17 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Section 2: Vocal Tract & Formants -->
       <div class="space-y-3">
         <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
-          02 / Vocal Tract Formants ($F_1, F_2, F_3$) & VSA
+          03 / Vocal Tract Formants ($F_1, F_2, F_3$) & VSA
         </div>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs leading-relaxed text-zinc-400">
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">First Formant ($F_1$):</strong>
-            Controlled by <strong>jaw opening</strong> and pharyngeal cavity size:
+            Controlled by <strong>jaw opening</strong> and pharynx size:
             <ul class="list-disc list-inside mt-1 space-y-0.5">
               <li><strong>High $F_1$ (600–800 Hz):</strong> Open jaw (/ɑ/, /æ/, /ʌ/).</li>
-              <li><strong>Low $F_1$ (250–350 Hz):</strong> Closed jaw / high tongue (/i/, /u/).</li>
+              <li><strong>Low $F_1$ (250–350 Hz):</strong> Closed jaw (/i/, /u/).</li>
             </ul>
           </div>
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
@@ -478,62 +549,47 @@ HTML_CONTENT = """<!DOCTYPE html>
           </div>
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">Vowel Space Area (VSA):</strong>
-            The geometric area ($\text{Hz}^2$) bounded by corner vowel formants (/i/, /u/, /æ/, /ɑ/). Larger VSA indicates clear articulatory precision; compressed VSA is a biomarker for dysarthria or speech fatigue.
+            The geometric area ($\text{Hz}^2$) bounded by corner vowel formants. Larger VSA indicates clear articulatory precision; compressed VSA is a biomarker for speech motor fatigue or dysarthria.
           </div>
         </div>
       </div>
 
-      <!-- Section 3: Clinical Perturbation -->
       <div class="space-y-3">
         <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
-          03 / Clinical Perturbation & Dysphonia (ASHA Criteria)
+          04 / Clinical Perturbation & Dysphonia (ASHA Criteria)
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs leading-relaxed text-zinc-400">
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">Jitter (local, %): Cycle-to-Cycle Pitch Perturbation</strong>
-            Measures microscopic variations in consecutive vocal fold vibration periods.
+            Microscopic variations in consecutive vocal fold vibration periods.
             <ul class="list-disc list-inside mt-1 space-y-0.5">
               <li><strong>&lt; 1.04%:</strong> Normal sustained modal phonation.</li>
-              <li><strong>&gt; 1.50%:</strong> Elevated frequency perturbation (vocal roughness, fatigue, or polyp).</li>
+              <li><strong>&gt; 1.50%:</strong> Elevated frequency perturbation (vocal roughness, fatigue).</li>
             </ul>
           </div>
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">Shimmer (local, %): Cycle-to-Cycle Amplitude Perturbation</strong>
-            Measures microscopic fluctuations in peak acoustic pressure from cycle to cycle.
+            Microscopic fluctuations in peak acoustic pressure from cycle to cycle.
             <ul class="list-disc list-inside mt-1 space-y-0.5">
               <li><strong>&lt; 3.81%:</strong> Normal sustained phonation.</li>
-              <li><strong>&gt; 5.50%:</strong> Elevated amplitude variation (incomplete glottal closure, breathiness).</li>
+              <li><strong>&gt; 5.50%:</strong> Elevated amplitude variation (incomplete glottal closure).</li>
             </ul>
           </div>
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
             <strong class="text-zinc-200 block text-xs">Harmonics-to-Noise Ratio (HNR, dB):</strong>
-            Quantifies the ratio of periodic harmonic energy produced by the vocal folds to turbulent aspiration noise:
+            Ratio of periodic harmonic energy produced by vocal folds to turbulent aspiration noise:
             <ul class="list-disc list-inside mt-1 space-y-0.5">
               <li><strong>&gt; 15.0 – 20.0 dB:</strong> Clean harmonic purity with negligible air turbulence.</li>
               <li><strong>&lt; 11.0 dB:</strong> Significant turbulent aspiration noise or hoarseness.</li>
             </ul>
           </div>
           <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
-            <strong class="text-zinc-200 block text-xs">Cepstral Peak Prominence (CPPS, dB):</strong>
-            The modern ASHA gold standard for dysphonia in <em>continuous conversational speech</em>. Measures the prominence of the harmonic quefrency peak above a regression baseline. Values <strong>&gt; 10.0 dB</strong> confirm clear periodic vocal fold vibration.
+            <strong class="text-zinc-200 block text-xs">Continuous CPPS (Cepstral Peak Prominence, dB):</strong>
+            The ASHA gold standard for dysphonia in continuous conversational speech. Values <strong>&gt; 10.0 dB</strong> confirm clear periodic vocal fold vibration.
           </div>
         </div>
       </div>
-
-      <!-- Section 4: Vocal Tract Length Normalization -->
-      <div class="space-y-3">
-        <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
-          04 / Vocal Tract Length (VTL) & Dynamic LPC Modeling
-        </div>
-        <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded text-xs leading-relaxed text-zinc-400 space-y-1.5">
-          <p>The pipeline models the vocal tract as an acoustic tube with closed glottis and open lips. Using Fitch's formant dispersion formula:
-          L ≈ (1/K) * Σ (2n - 1)c / (4 * Fn) (where c = 34,300 cm/s), the physical length is estimated.</p>
-          <p>Rather than using a static filter order, the Linear Predictive Coding (LPC) order is dynamically computed as p ≈ 2 * (L * fs / c) + 2. For an adult male (~17.2 cm), p = 18 provides optimal pole capacity without splitting resonances.</p>
-        </div>
-      </div>
-
     </div>
-
   </div>
 
   <footer class="border-t border-zinc-800/60 py-3 text-center text-xs font-mono text-zinc-600">
@@ -545,7 +601,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     let sentencesList = [];
     let currentSentenceIndex = 0;
 
-    // Mic recording state
     let mediaStream = null;
     let audioContext = null;
     let mediaRecorder = null;
@@ -554,7 +609,44 @@ HTML_CONTENT = """<!DOCTYPE html>
     let recordSeconds = 0;
     let animFrame = null;
     let micAnalyser = null;
-    let activeRecMode = 'dashboard'; // 'dashboard', 'recognition', 'enroll'
+
+    const plotDescriptions = {
+      dft: {
+        title: "Discrete Fourier Transform (DFT) Magnitude Spectrum",
+        sub: "Target Vowel Slice | N=512 (32ms) Hann Window | fs=16kHz",
+        desc: "The DFT spectrum decomposes a stationary 32 ms windowed vowel frame into positive frequency bins. The vertical dashed red line marks the dominant pitch harmonic, and dotted gray lines indicate integer harmonics. Download the raw CSV data to analyze exact frequency and decibel points."
+      },
+      spectrogram: {
+        title: "Short-Time Fourier Transform (STFT) Speech Spectrogram",
+        sub: "0 - 4000 Hz Speech Band | 75% Overlap | Magma Heatmap",
+        desc: "Displays the continuous spectral energy distribution across time and frequency. Bright horizontal bands represent vocal tract formants during voiced vowels, while diffuse high-frequency energy represents unvoiced fricatives and stops."
+      },
+      pitch: {
+        title: "Glottal Fundamental Frequency (f0) Intonation Contour",
+        sub: "Normalized Autocorrelation & Parabolic Sub-sample Interpolation",
+        desc: "Traces the speaker's vocal pitch intonation over time. The solid blue line marks the median fundamental pitch (f0), and the shaded blue band represents the ±1 standard deviation prosodic variance."
+      },
+      lpc: {
+        title: "Linear Predictive Coding (LPC) Vocal Tract Filter Envelope",
+        sub: "Pre-Emphasized Levinson-Durbin Toeplitz Solver (p=18)",
+        desc: "Deconvolves the vocal tract filter from the glottal source. The bold blue curve fits a smooth spectral envelope over the gray FFT harmonics, locating resonant formant frequencies (F1 jaw opening, F2 tongue position, F3 lip/pharynx)."
+      },
+      mfcc: {
+        title: "Normalized Mel-Frequency Cepstral Coefficients (c1 - c12, CMVN)",
+        sub: "Log Mel Filterbank Liftering & Cepstral Normalization",
+        desc: "Maps spectral timbre onto the human perceptual Mel scale. Cepstral Mean & Variance Normalization (CMVN) isolates phonetic articulation from frame loudness (c0, shown in the lower panel)."
+      },
+      vowel_space: {
+        title: "Phonetic Vowel Space Quadrilateral (F1 vs F2 IPA Acoustic Space)",
+        sub: "Inverted Phonetic F1/F2 Space with Cardinal Vowel Benchmarks",
+        desc: "Plots the speaker's formant dispersion against standard International Phonetic Alphabet (IPA) cardinal vowels (/i/, /u/, /æ/, /ɑ/). The green star marks the speaker's acoustic centroid and the bounded area represents the Vowel Space Area (VSA)."
+      },
+      glottal: {
+        title: "Glottal Flow Derivative Residual Waveform (Inverse Filtered Source)",
+        sub: "Vocal Fold Excitation Source Signal e[n] after LPC Deconvolution",
+        desc: "Extracts the raw acoustic pulse train generated at the vocal folds before filtering by the throat and mouth. The negative derivative spikes correspond to glottal closure instants (GCI), with Normalized Amplitude Quotient (NAQ) quantifying closure velocity."
+      }
+    };
 
     async function initApp() {
       await refreshFileList();
@@ -563,9 +655,9 @@ HTML_CONTENT = """<!DOCTYPE html>
       updateActiveAudio();
       triggerAnalyze();
       loadDatasetTable();
+      updateSelectedPlot();
     }
 
-    // Top-Level Navigation
     function switchView(viewId) {
       ['dashboard', 'recognition', 'info'].forEach(v => {
         document.getElementById(`view-${v}`).classList.add('hidden');
@@ -579,9 +671,8 @@ HTML_CONTENT = """<!DOCTYPE html>
       else actions.classList.add('hidden');
     }
 
-    // Sub-Tabs in Dashboard
     function switchDashTab(tabId) {
-      ['report', 'visual', 'dataset'].forEach(t => {
+      ['plots', 'report', 'visual', 'dataset'].forEach(t => {
         document.getElementById(`tabContent-${t}`).classList.add('hidden');
         document.getElementById(`tabBtn-${t}`).className = 'py-2.5 text-zinc-500 hover:text-zinc-300';
       });
@@ -612,6 +703,40 @@ HTML_CONTENT = """<!DOCTYPE html>
       const file = document.getElementById('fileSelect').value || 'voice.wav';
       document.getElementById('activeFileLabel').textContent = file;
       document.getElementById('audioPlayer').src = `/api/audio?file=${encodeURIComponent(file)}`;
+
+      // Update download links
+      document.getElementById('btnDownloadZipHeader').href = `/api/export/zip?file=${encodeURIComponent(file)}`;
+      document.getElementById('btnZipDownloadBanner').href = `/api/export/zip?file=${encodeURIComponent(file)}`;
+      document.getElementById('btnDownloadDftCsv').href = `/api/data/dft_csv?file=${encodeURIComponent(file)}`;
+      document.getElementById('btnDownloadComposite').href = `/api/plot/composite?file=${encodeURIComponent(file)}&download=1`;
+      document.getElementById('dashboardImg').src = `/api/plot/composite?file=${encodeURIComponent(file)}&t=${Date.now()}`;
+
+      updateSelectedPlot();
+    }
+
+    function updateSelectedPlot() {
+      const file = document.getElementById('fileSelect').value || 'voice.wav';
+      const plotType = document.getElementById('analysisPlotSelect').value || 'dft';
+
+      const img = document.getElementById('activeAnalysisPlotImg');
+      img.style.opacity = '0.4';
+      img.src = `/api/plot/${plotType}?file=${encodeURIComponent(file)}&t=${Date.now()}`;
+      img.onload = () => { img.style.opacity = '1.0'; };
+
+      document.getElementById('btnDownloadCurrentPlot').href = `/api/plot/${plotType}?file=${encodeURIComponent(file)}&download=1`;
+
+      const csvBtn = document.getElementById('btnDownloadDftCsv');
+      if (plotType === 'dft') {
+        csvBtn.classList.remove('hidden');
+        csvBtn.href = `/api/data/dft_csv?file=${encodeURIComponent(file)}`;
+      } else {
+        csvBtn.classList.add('hidden');
+      }
+
+      const meta = plotDescriptions[plotType] || plotDescriptions['dft'];
+      document.getElementById('plotTitleLabel').textContent = meta.title;
+      document.getElementById('plotSubLabel').textContent = meta.sub;
+      document.getElementById('plotDescriptionText').textContent = meta.desc;
     }
 
     document.getElementById('fileSelect').addEventListener('change', () => {
@@ -679,17 +804,6 @@ HTML_CONTENT = """<!DOCTYPE html>
       document.getElementById('rawReportText').textContent = data.report_text || '';
     }
 
-    async function renderDashboardImg() {
-      const file = document.getElementById('fileSelect').value || 'voice.wav';
-      const img = document.getElementById('dashboardImg');
-      img.style.opacity = '0.4';
-      const res = await fetch(`/api/dashboard?file=${encodeURIComponent(file)}`);
-      const data = await res.json();
-      img.src = `${data.image_url}&t=${Date.now()}`;
-      img.style.opacity = '1.0';
-      switchDashTab('visual');
-    }
-
     async function loadDatasetTable() {
       try {
         const res = await fetch('/api/dataset');
@@ -726,7 +840,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     }
 
     // -------------------------------------------------------------
-    // VOICE RECOGNITION & PRE-WRITTEN SENTENCES
+    // VOICE RECOGNITION LOGIC
     // -------------------------------------------------------------
     async function loadSentences() {
       try {
@@ -803,7 +917,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     }
 
     async function startMicRecording() {
-      activeRecMode = 'dashboard';
       await startGenericAudioStream();
       document.getElementById('btnStartRec').disabled = true;
       document.getElementById('btnStartRec').classList.add('opacity-50');
@@ -823,30 +936,24 @@ HTML_CONTENT = """<!DOCTYPE html>
       await uploadAndAnalyzeAudioBlob(wavBlob, filename);
     }
 
-    // Recognition Recording Mode
     async function startRecognitionRecord() {
       const btn = document.getElementById('btnRecogStart');
       const timer = document.getElementById('recogTimer');
       if (mediaRecorder && mediaRecorder.state === 'recording') {
-        // Stop & Identify
-        btn.textContent = 'Processing & Identifying Voice...';
+        btn.textContent = 'Processing & Identifying...';
         btn.disabled = true;
         const wavBlob = await stopGenericAudioStream();
         timer.classList.add('hidden');
         btn.textContent = 'Record & Identify Voice';
         btn.disabled = false;
-
         await identifyVoiceBlob(wavBlob);
       } else {
-        // Start
-        activeRecMode = 'recognition';
         await startGenericAudioStream(timer);
         btn.textContent = 'Stop & Identify Speaker';
         btn.className = 'w-full bg-red-600 hover:bg-red-700 text-white font-semibold text-xs py-2 rounded transition flex items-center justify-center gap-2';
       }
     }
 
-    // Enrollment Recording Mode
     async function startEnrollRecord() {
       const name = document.getElementById('speakerNameInput').value.trim();
       if (!name) {
@@ -864,10 +971,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         timer.classList.add('hidden');
         btn.textContent = 'Record & Enroll Voice';
         btn.disabled = false;
-
         await enrollVoiceBlob(wavBlob, name);
       } else {
-        activeRecMode = 'enroll';
         await startGenericAudioStream(timer);
         btn.textContent = 'Stop & Save Voice Profile';
         btn.className = 'w-full bg-red-600 hover:bg-red-700 text-white font-semibold text-xs py-2 rounded transition flex items-center justify-center gap-2';
@@ -960,7 +1065,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     function audioBufferToWav(buffer) {
       const numChannels = 1;
       const sampleRate = buffer.sampleRate;
-      const format = 1; // PCM
+      const format = 1;
       const bitDepth = 16;
       const channelData = buffer.getChannelData(0);
       const dataLength = channelData.length * (bitDepth / 8);
@@ -1157,16 +1262,119 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_json(profile)
             return
 
-        # 5. Render 6-Panel Dashboard image
-        if path == "/api/dashboard":
+        # 5. Dedicated Individual Analysis Plots API
+        # Path format: /api/plot/<plot_type>?file=voice.wav
+        if path.startswith("/api/plot/"):
+            plot_type = path.split("/api/plot/")[1]
+            filename = params.get("file", ["voice.wav"])[0]
+            download = params.get("download", ["0"])[0] == "1"
+            file_path = os.path.join(WORKSPACE_DIR, filename)
+            if not os.path.isfile(file_path):
+                self.send_error(404, "Audio file not found")
+                return
+
+            base_name = os.path.splitext(filename)[0]
+            output_img = os.path.join(WORKSPACE_DIR, f"temp_{plot_type}_{base_name}.png")
+
+            try:
+                if plot_type == "dft":
+                    render_dft_plot(file_path, save_path=output_img)
+                elif plot_type == "spectrogram":
+                    render_spectrogram_plot(file_path, save_path=output_img)
+                elif plot_type == "pitch":
+                    render_pitch_plot(file_path, save_path=output_img)
+                elif plot_type == "lpc":
+                    render_lpc_plot(file_path, save_path=output_img)
+                elif plot_type == "mfcc":
+                    render_mfcc_plot(file_path, save_path=output_img)
+                elif plot_type == "vowel_space":
+                    render_vowel_space_plot(file_path, save_path=output_img)
+                elif plot_type == "glottal":
+                    render_glottal_plot(file_path, save_path=output_img)
+                elif plot_type == "composite":
+                    render_voice_dashboard(file_path, save_path=output_img, show=False)
+                else:
+                    self.send_error(400, "Unknown plot type")
+                    return
+
+                with open(output_img, "rb") as f:
+                    data = f.read()
+
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                if download:
+                    self.send_header("Content-Disposition", f'attachment; filename="{plot_type}_{base_name}.png"')
+                else:
+                    self.send_header("Content-Disposition", "inline")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            except Exception as e:
+                self.send_error(500, f"Error rendering plot: {e}")
+                return
+
+        # 6. Raw DFT Spectrum Data Points Export (CSV)
+        if path == "/api/data/dft_csv":
             filename = params.get("file", ["voice.wav"])[0]
             file_path = os.path.join(WORKSPACE_DIR, filename)
-            save_img = os.path.join(WORKSPACE_DIR, "voice_dashboard.png")
-            render_voice_dashboard(file_path, save_img, show=False)
-            self.send_json({"image_url": "/api/image?file=voice_dashboard.png"})
+            if not os.path.isfile(file_path):
+                self.send_error(404, "Audio file not found")
+                return
+
+            base_name = os.path.splitext(filename)[0]
+            temp_csv = os.path.join(WORKSPACE_DIR, f"temp_dft_{base_name}.csv")
+            temp_png = os.path.join(WORKSPACE_DIR, f"temp_dft_{base_name}.png")
+
+            render_dft_plot(file_path, save_path=temp_png, csv_save_path=temp_csv)
+
+            with open(temp_csv, "rb") as f:
+                data = f.read()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f'attachment; filename="dft_spectrum_{base_name}.csv"')
+            self.end_headers()
+            self.wfile.write(data)
+
+            try:
+                os.remove(temp_csv)
+                os.remove(temp_png)
+            except Exception:
+                pass
             return
 
-        # 6. Serve Image
+        # 7. Complete ZIP Bundle Export
+        if path == "/api/export/zip":
+            filename = params.get("file", ["voice.wav"])[0]
+            file_path = os.path.join(WORKSPACE_DIR, filename)
+            if not os.path.isfile(file_path):
+                self.send_error(404, "Audio file not found")
+                return
+
+            base_name = os.path.splitext(filename)[0]
+            temp_zip = os.path.join(WORKSPACE_DIR, f"temp_bundle_{base_name}.zip")
+
+            export_all_analyses_bundle(file_path, temp_zip)
+
+            with open(temp_zip, "rb") as f:
+                data = f.read()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f'attachment; filename="analyses_bundle_{base_name}.zip"')
+            self.end_headers()
+            self.wfile.write(data)
+
+            try:
+                os.remove(temp_zip)
+            except Exception:
+                pass
+            return
+
+        # 8. Serve Image by File Name
         if path == "/api/image":
             filename = params.get("file", ["voice_dashboard.png"])[0]
             file_path = os.path.join(WORKSPACE_DIR, filename)
@@ -1184,13 +1392,13 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
-        # 7. Dataset rows
+        # 9. Dataset Rows
         if path == "/api/dataset":
             records = load_dataset_records()
             self.send_json(records)
             return
 
-        # 8. Raw CSV Download
+        # 10. Raw CSV Download
         if path == "/voice_dataset.csv":
             csv_path = os.path.join(WORKSPACE_DIR, "voice_dataset.csv")
             if not os.path.isfile(csv_path):
@@ -1205,13 +1413,12 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
-        # 9. Voice Recognition: Get Pre-written Sentences
+        # 11. Voice Recognition: Sentences & Speakers
         if path == "/api/recognition/sentences":
             sentences = get_all_sentences()
             self.send_json(sentences)
             return
 
-        # 10. Voice Recognition: List Enrolled Speakers
         if path == "/api/recognition/speakers":
             speakers = default_db.list_speakers()
             self.send_json(speakers)

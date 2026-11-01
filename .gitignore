@@ -26,6 +26,9 @@ reports/
 *.jpg
 *.jpeg
 *.svg
+*.zip
+recording_*.wav
+speaker_*.wav
 !assets/*.png
 !assets/*.jpg
 

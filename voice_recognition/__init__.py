@@ -21,3 +21,4 @@ __all__ = [
     "get_random_sentence",
     "get_all_sentences",
 ]
+

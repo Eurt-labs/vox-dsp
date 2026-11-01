@@ -52,3 +52,4 @@ def get_random_sentence():
 def get_all_sentences():
     """Returns all pre-written sentences."""
     return PHONETIC_SENTENCES
+
