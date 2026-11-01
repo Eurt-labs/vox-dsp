@@ -1,11 +1,13 @@
 """
-vox-dsp Minimalist Centralized Access Dashboard & Live Audio Recording Server.
+vox-dsp Centralized Access Dashboard, Live Recording Studio & Voice Recognition Engine.
 Zero-dependency HTTP server using Python's standard library.
+
 Features:
 - Minimalist Swiss/monochrome design with high data density
-- In-browser live microphone audio recording & real-time analysis
-- File upload for external .wav recordings
-- Interactive audio playback, 6-panel visual dashboard, and dataset explorer
+- Live in-browser microphone recording & instant DSP analysis
+- Voice Recognition page: Record pre-written sentences & authenticate/identify speakers
+- Acoustic Info Guide: Complete plain-language explanations of all numbers and metrics
+- Tabular dataset explorer & 6-panel high-resolution visualizer
 """
 
 import os
@@ -14,8 +16,6 @@ import json
 import glob
 import time
 import urllib.parse
-import mimetypes
-import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import soundfile as sf
 import numpy as np
@@ -24,13 +24,18 @@ from analyze_voice import analyze_audio_signal, save_rows_to_csv, load_audio
 from audio_dsp.diagnostic_engine import generate_voice_diagnostic_report
 from dashboard import render_voice_dashboard
 
+from voice_recognition import (
+    default_db,
+    PHONETIC_SENTENCES,
+    get_all_sentences,
+)
+
 PORT = 8050
 WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_available_audio_files():
     wavs = glob.glob(os.path.join(WORKSPACE_DIR, "*.wav"))
-    # Return sorted by modification time (most recent first)
     wavs.sort(key=os.path.getmtime, reverse=True)
     return [os.path.basename(w) for w in wavs]
 
@@ -50,136 +55,120 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>vox-dsp | Voice Acoustic Biometrics</title>
+  <title>vox-dsp | Voice Biometrics & Speaker Recognition</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
-            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
-          }
-        }
-      }
-    }
-  </script>
   <style>
-    /* Minimalist styling */
-    body { background-color: #09090b; color: #f4f4f5; }
+    body { background-color: #09090b; color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .card-surface { background-color: #121215; border: 1px solid #27272a; }
-    .tab-active { border-bottom: 2px solid #f4f4f5; color: #f4f4f5; font-weight: 500; }
-    .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+    .nav-btn-active { border-bottom: 2px solid #f4f4f5; color: #f4f4f5; font-weight: 600; }
     .pulse-rec { animation: pulse 1.2s infinite ease-in-out; }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.3; transform: scale(1.2); }
-    }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.3; transform: scale(1.2); } }
   </style>
 </head>
 <body class="min-h-screen flex flex-col font-sans antialiased text-sm text-zinc-300">
 
-  <!-- Minimal Header -->
-  <header class="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
+  <!-- Minimal Header & Navigation -->
+  <header class="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
     <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-      <div class="flex items-center space-x-3">
-        <span class="font-mono text-xs tracking-widest uppercase text-zinc-400 font-semibold">vox-dsp</span>
-        <span class="text-zinc-600">/</span>
-        <span class="text-xs text-zinc-400">Acoustic Biometrics</span>
+      <div class="flex items-center space-x-6">
+        <div class="flex items-center space-x-2">
+          <span class="font-mono text-xs tracking-widest uppercase text-zinc-400 font-bold">vox-dsp</span>
+          <span class="text-zinc-600">/</span>
+        </div>
+        <nav class="flex space-x-5 text-xs font-mono uppercase tracking-wider">
+          <button onclick="switchView('dashboard')" id="nav-dashboard" class="py-4 nav-btn-active">
+            Acoustic Biometrics
+          </button>
+          <button onclick="switchView('recognition')" id="nav-recognition" class="py-4 text-zinc-500 hover:text-zinc-300">
+            Voice Recognition
+          </button>
+          <button onclick="switchView('info')" id="nav-info" class="py-4 text-zinc-500 hover:text-zinc-300">
+            Acoustic Info Guide
+          </button>
+        </nav>
       </div>
 
-      <!-- Action Controls -->
-      <div class="flex items-center space-x-2">
-        <select id="fileSelect" class="bg-zinc-900 border border-zinc-800 text-xs rounded px-2.5 py-1 text-zinc-300 focus:outline-none focus:border-zinc-600 font-mono">
+      <!-- Quick Actions for Active Dashboard -->
+      <div id="headerQuickActions" class="flex items-center space-x-2">
+        <select id="fileSelect" class="bg-zinc-900 border border-zinc-800 text-xs rounded px-2.5 py-1 text-zinc-300 font-mono">
           <option value="voice.wav">voice.wav</option>
         </select>
-
-        <button onclick="toggleRecordDrawer()" id="btnRecordToggle" class="border border-zinc-800 hover:border-zinc-600 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 transition flex items-center gap-1.5 font-medium">
+        <button onclick="toggleRecordDrawer()" class="border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-xs px-2.5 py-1 rounded text-zinc-300 flex items-center gap-1.5 font-medium">
           <span class="w-2 h-2 rounded-full bg-red-500"></span>
           <span>Record Voice</span>
         </button>
-
-        <label class="border border-zinc-800 hover:border-zinc-600 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 transition cursor-pointer font-medium">
-          <span>Upload WAV</span>
-          <input type="file" id="fileUploadInput" accept=".wav" class="hidden" onchange="handleFileUpload(event)">
-        </label>
-
-        <button id="btnAnalyze" onclick="triggerAnalyze()" class="bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs px-3.5 py-1 rounded transition shadow-sm">
-          Run Analysis
+        <button id="btnAnalyze" onclick="triggerAnalyze()" class="bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs px-3 py-1 rounded transition">
+          Analyze
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Live Recording Drawer (Hidden by default) -->
-  <div id="recordingDrawer" class="hidden border-b border-zinc-800 bg-zinc-900/90 py-4 px-4 transition">
-    <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-      <div class="flex items-center space-x-3">
-        <span id="recDot" class="w-2.5 h-2.5 rounded-full bg-red-500 pulse-rec"></span>
-        <span id="recStatusLabel" class="text-xs uppercase tracking-wider font-mono text-red-400 font-semibold">Microphone Ready</span>
-        <span id="recTimer" class="font-mono text-sm font-bold text-zinc-100 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">00:00</span>
-      </div>
+  <!-- ============================================================== -->
+  <!-- VIEW 1: ACOUSTIC BIOMETRICS DASHBOARD                          -->
+  <!-- ============================================================== -->
+  <div id="view-dashboard" class="flex-1 space-y-6">
 
-      <!-- Minimal Live Waveform Canvas -->
-      <canvas id="micCanvas" width="280" height="32" class="rounded bg-zinc-950 border border-zinc-800/80"></canvas>
-
-      <div class="flex items-center space-x-2">
-        <button id="btnStartRec" onclick="startMicRecording()" class="bg-red-500 hover:bg-red-600 text-white text-xs px-3 py-1 rounded font-medium transition">
-          Start Recording
-        </button>
-        <button id="btnStopRec" onclick="stopMicRecording()" disabled class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs px-3 py-1 rounded font-medium transition opacity-50 cursor-not-allowed">
-          Stop & Analyze
-        </button>
-        <button onclick="toggleRecordDrawer()" class="text-zinc-500 hover:text-zinc-300 text-xs px-2 py-1">
-          Cancel
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Audio Playback Banner -->
-  <div class="border-b border-zinc-800/50 bg-zinc-950/40 py-2.5 px-4">
-    <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
-      <div class="flex items-center space-x-2 font-mono">
-        <span class="text-zinc-500">ACTIVE:</span>
-        <span id="activeFileLabel" class="text-zinc-200">voice.wav</span>
-        <span id="activeDurationLabel" class="text-zinc-500">6.59s @ 16kHz</span>
-      </div>
-      <audio id="audioPlayer" controls class="h-7 w-72 rounded opacity-90"></audio>
-      <div class="flex items-center space-x-2">
-        <button onclick="renderDashboardImg()" class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 px-2.5 py-1 rounded text-xs transition">
-          View 6-Panel Plot
-        </button>
-        <button onclick="exportJSON()" class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 px-2.5 py-1 rounded text-xs transition">
-          Export JSON
-        </button>
+    <!-- Live Recording Drawer -->
+    <div id="recordingDrawer" class="hidden border-b border-zinc-800 bg-zinc-900/90 py-4 px-4 transition">
+      <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div class="flex items-center space-x-3">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-500 pulse-rec"></span>
+          <span id="recStatusLabel" class="text-xs uppercase font-mono text-red-400 font-semibold">Microphone Ready</span>
+          <span id="recTimer" class="font-mono text-sm font-bold text-zinc-100 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">00:00</span>
+        </div>
+        <canvas id="micCanvas" width="280" height="32" class="rounded bg-zinc-950 border border-zinc-800"></canvas>
+        <div class="flex items-center space-x-2">
+          <button id="btnStartRec" onclick="startMicRecording()" class="bg-red-500 hover:bg-red-600 text-white text-xs px-3 py-1 rounded font-medium">
+            Start Recording
+          </button>
+          <button id="btnStopRec" onclick="stopMicRecording()" disabled class="bg-zinc-800 text-zinc-400 text-xs px-3 py-1 rounded font-medium opacity-50 cursor-not-allowed">
+            Stop & Analyze
+          </button>
+          <button onclick="toggleRecordDrawer()" class="text-zinc-500 hover:text-zinc-300 text-xs px-2 py-1">
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Main Content -->
-  <main class="max-w-6xl w-full mx-auto px-4 py-6 flex-1 space-y-6">
+    <!-- Audio Playback Banner -->
+    <div class="border-b border-zinc-800/50 bg-zinc-950/40 py-2.5 px-4">
+      <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div class="flex items-center space-x-2 font-mono">
+          <span class="text-zinc-500">SAMPLE:</span>
+          <span id="activeFileLabel" class="text-zinc-200">voice.wav</span>
+          <span id="activeDurationLabel" class="text-zinc-500">6.59s @ 16kHz</span>
+        </div>
+        <audio id="audioPlayer" controls class="h-7 w-72 rounded opacity-90"></audio>
+        <div class="flex items-center space-x-2">
+          <label class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 px-2.5 py-1 rounded text-xs cursor-pointer">
+            Upload WAV
+            <input type="file" id="fileUploadInput" accept=".wav" class="hidden" onchange="handleFileUpload(event)">
+          </label>
+          <button onclick="renderDashboardImg()" class="border border-zinc-800 hover:border-zinc-700 text-zinc-400 px-2.5 py-1 rounded text-xs">
+            View 6-Panel Plot
+          </button>
+        </div>
+      </div>
+    </div>
 
-    <!-- 4-Card Minimal Grid -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-      
-      <!-- Card 1: Morphology -->
+    <!-- 4 Minimal Metric Cards -->
+    <div class="max-w-6xl mx-auto px-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
       <div class="card-surface rounded-lg p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">01 / Speaker Morphology</div>
+        <div class="text-[11px] font-mono uppercase text-zinc-500">01 / Speaker Morphology</div>
         <div class="mt-2 text-base font-semibold text-zinc-100" id="cardSpeaker">Adult Male</div>
         <div class="mt-2 text-xs text-zinc-400 space-y-0.5">
           <div class="flex justify-between"><span>Vocal Tract Length:</span> <strong id="cardVTL" class="text-zinc-200 font-mono">17.2 cm</strong></div>
-          <div class="flex justify-between"><span>LPC Model Order:</span> <strong id="cardLPCOrder" class="text-zinc-200 font-mono">18</strong></div>
+          <div class="flex justify-between"><span>Adapted LPC Order:</span> <strong id="cardLPCOrder" class="text-zinc-200 font-mono">18</strong></div>
         </div>
       </div>
 
-      <!-- Card 2: Intonation -->
       <div class="card-surface rounded-lg p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">02 / Glottal Pitch (f0)</div>
+        <div class="text-[11px] font-mono uppercase text-zinc-500">02 / Glottal Pitch (f0)</div>
         <div class="mt-2 text-base font-semibold text-zinc-100 flex items-baseline gap-1.5">
           <span id="cardF0" class="text-lg font-mono">117.1</span>
-          <span class="text-xs text-zinc-500 font-normal">Hz median</span>
+          <span class="text-xs text-zinc-500">Hz median</span>
         </div>
         <div class="mt-2 text-xs text-zinc-400 space-y-0.5">
           <div class="flex justify-between"><span>Prosodic Range:</span> <strong id="cardSpread" class="text-zinc-200 font-mono">11.45 st</strong></div>
@@ -187,9 +176,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Card 3: Formants -->
       <div class="card-surface rounded-lg p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">03 / Formant Resonances</div>
+        <div class="text-[11px] font-mono uppercase text-zinc-500">03 / Formant Resonances</div>
         <div class="mt-2 text-xs font-mono text-zinc-200 font-semibold" id="cardFormants">F1: 435 | F2: 1595 Hz</div>
         <div class="mt-2 text-xs text-zinc-400 space-y-0.5">
           <div class="flex justify-between"><span>Dominant Vowel:</span> <strong id="cardVowel" class="text-zinc-200 truncate max-w-[120px] text-right">Mid-Central</strong></div>
@@ -197,141 +185,407 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Card 4: Biometrics -->
       <div class="card-surface rounded-lg p-4">
-        <div class="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-zinc-500">
+        <div class="flex items-center justify-between text-[11px] font-mono uppercase text-zinc-500">
           <span>04 / Voice Stability</span>
           <span id="cardStatusBadge" class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-300">BORDERLINE</span>
         </div>
         <div class="mt-2 text-base font-semibold text-zinc-100 flex items-baseline gap-1.5">
           <span id="cardJitter" class="text-lg font-mono">1.29%</span>
-          <span class="text-xs text-zinc-500 font-normal">jitter (local)</span>
+          <span class="text-xs text-zinc-500">jitter</span>
         </div>
         <div class="mt-2 text-xs text-zinc-400 space-y-0.5">
           <div class="flex justify-between"><span>Harmonicity (HNR):</span> <strong id="cardHNR" class="text-zinc-200 font-mono">10.99 dB</strong></div>
           <div class="flex justify-between"><span>Continuous CPPS:</span> <strong id="cardCPPS" class="text-zinc-200 font-mono">34.93 dB</strong></div>
         </div>
       </div>
-
     </div>
 
-    <!-- Minimal Navigation Tabs -->
-    <div class="border-b border-zinc-800">
-      <nav class="flex space-x-6 text-xs font-mono uppercase tracking-wider">
-        <button onclick="switchTab('report')" id="tabBtn-report" class="py-2.5 tab-active">
-          Clinical Evaluation
+    <!-- Dashboard Sub-Tabs -->
+    <div class="max-w-6xl mx-auto px-4 space-y-4">
+      <div class="border-b border-zinc-800">
+        <nav class="flex space-x-6 text-xs font-mono uppercase tracking-wider">
+          <button onclick="switchDashTab('report')" id="tabBtn-report" class="py-2.5 nav-btn-active">
+            Clinical Evaluation
+          </button>
+          <button onclick="switchDashTab('visual')" id="tabBtn-visual" class="py-2.5 text-zinc-500 hover:text-zinc-300">
+            6-Panel Visualizer
+          </button>
+          <button onclick="switchDashTab('dataset')" id="tabBtn-dataset" class="py-2.5 text-zinc-500 hover:text-zinc-300">
+            Dataset Records (<span id="datasetCount">1</span>)
+          </button>
+        </nav>
+      </div>
+
+      <div id="tabContent-report" class="space-y-4">
+        <div class="card-surface rounded-lg p-5 space-y-4">
+          <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">ASHA & Praat Normative Evaluation</span>
+            <span id="evalOverallHealth" class="text-xs text-zinc-400 font-mono"></span>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div class="space-y-2 border border-zinc-800 rounded p-3 bg-zinc-950/40">
+              <div class="text-[11px] font-mono uppercase text-zinc-500 font-semibold">Vocal Stability Criteria</div>
+              <div class="flex justify-between py-1 border-b border-zinc-900"><span>Jitter (local, %):</span><span id="repJitter" class="font-mono text-zinc-200">1.29%</span></div>
+              <div class="flex justify-between py-1 border-b border-zinc-900"><span>Shimmer (local, %):</span><span id="repShimmer" class="font-mono text-zinc-200">14.75%</span></div>
+              <div class="flex justify-between py-1 border-b border-zinc-900"><span>Harmonics-to-Noise Ratio:</span><span id="repHNR" class="font-mono text-zinc-200">10.99 dB</span></div>
+              <div class="flex justify-between py-1"><span>Continuous CPPS:</span><span id="repCPPS" class="font-mono text-zinc-200">34.93 dB</span></div>
+            </div>
+            <div class="space-y-2 border border-zinc-800 rounded p-3 bg-zinc-950/40">
+              <div class="text-[11px] font-mono uppercase text-zinc-500 font-semibold">Resonance & Glottal Source</div>
+              <div class="flex justify-between py-1 border-b border-zinc-900"><span>Glottal Flow NAQ:</span><span id="repNAQ" class="font-mono text-zinc-200">0.092</span></div>
+              <div class="flex justify-between py-1 border-b border-zinc-900"><span>Vocal Tract Length:</span><span id="repVTL" class="font-mono text-zinc-200">17.2 cm</span></div>
+              <div class="flex justify-between py-1 border-b border-zinc-900"><span>Prosodic Style:</span><span id="repProsody" class="font-mono text-zinc-200">Dynamic</span></div>
+              <div class="flex justify-between py-1"><span>Phonetic VSA:</span><span id="repVSA" class="font-mono text-zinc-200">111,332 Hz²</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[11px] font-mono uppercase text-zinc-500">Diagnostic Narrative</span>
+              <button onclick="copyReportText()" class="text-xs text-zinc-400 hover:text-zinc-200 underline font-mono">Copy Report</button>
+            </div>
+            <pre id="rawReportText" class="p-3.5 rounded bg-zinc-950 border border-zinc-800 font-mono text-xs text-zinc-300 leading-relaxed overflow-x-auto"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div id="tabContent-visual" class="hidden space-y-3">
+        <div class="card-surface rounded-lg p-4 flex flex-col items-center">
+          <div class="w-full flex justify-between items-center mb-3">
+            <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">6-Panel High-Resolution Acoustic Dashboard</span>
+            <a href="/api/image?file=voice_dashboard.png" download class="border border-zinc-800 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 font-mono">Download PNG</a>
+          </div>
+          <div class="w-full border border-zinc-800 rounded bg-zinc-950 p-1 flex justify-center">
+            <img id="dashboardImg" src="/api/image?file=voice_dashboard.png" alt="6-Panel Diagnostic Dashboard" class="max-w-full h-auto rounded">
+          </div>
+        </div>
+      </div>
+
+      <div id="tabContent-dataset" class="hidden space-y-3">
+        <div class="card-surface rounded-lg p-4 space-y-3">
+          <div class="flex justify-between items-center">
+            <span class="text-xs font-mono uppercase text-zinc-400 font-semibold">voice_dataset.csv Archive</span>
+            <a href="/voice_dataset.csv" download class="border border-zinc-800 text-xs px-2.5 py-1 rounded font-mono text-zinc-300">Download CSV</a>
+          </div>
+          <div class="overflow-x-auto border border-zinc-800 rounded">
+            <table class="min-w-full text-xs text-left text-zinc-300 font-mono">
+              <thead class="bg-zinc-950 text-zinc-500 uppercase border-b border-zinc-800">
+                <tr>
+                  <th class="px-3 py-2">File</th>
+                  <th class="px-3 py-2">Speaker</th>
+                  <th class="px-3 py-2">VTL</th>
+                  <th class="px-3 py-2">f0 (Hz)</th>
+                  <th class="px-3 py-2">F1</th>
+                  <th class="px-3 py-2">F2</th>
+                  <th class="px-3 py-2">Jitter%</th>
+                  <th class="px-3 py-2">HNR</th>
+                  <th class="px-3 py-2">CPPS</th>
+                  <th class="px-3 py-2">Assessment</th>
+                </tr>
+              </thead>
+              <tbody id="datasetTableBody" class="divide-y divide-zinc-900"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- VIEW 2: VOICE RECOGNITION & SPEAKER IDENTIFICATION             -->
+  <!-- ============================================================== -->
+  <div id="view-recognition" class="hidden flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
+
+    <!-- Top Card: Pre-Written Phonetic Sentence Prompt -->
+    <div class="card-surface rounded-xl p-5 space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+        <div class="flex items-center space-x-2">
+          <span class="font-mono text-xs uppercase tracking-wider text-zinc-400 font-semibold">Pre-Written Benchmark Sentence</span>
+          <span id="promptCategory" class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">All-Phoneme Pangram</span>
+        </div>
+        <button onclick="cycleSentence()" class="text-xs font-mono text-zinc-400 hover:text-zinc-100 flex items-center gap-1">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+          Next Sentence
         </button>
-        <button onclick="switchTab('visual')" id="tabBtn-visual" class="py-2.5 text-zinc-500 hover:text-zinc-300">
-          6-Panel Diagnostic Visualizer
-        </button>
-        <button onclick="switchTab('dataset')" id="tabBtn-dataset" class="py-2.5 text-zinc-500 hover:text-zinc-300">
-          Dataset Records (<span id="datasetCount">1</span>)
-        </button>
-      </nav>
+      </div>
+
+      <div class="p-4 rounded-lg bg-zinc-950 border border-zinc-800 text-center">
+        <p class="text-xs text-zinc-500 uppercase tracking-widest font-mono mb-1">Please read aloud:</p>
+        <p id="promptText" class="text-lg font-medium text-zinc-100 tracking-wide font-sans">"The quick brown fox jumps over the lazy dog."</p>
+        <p id="promptFocus" class="text-[11px] text-zinc-500 font-mono mt-2">Phonetic Focus: Full consonant and vowel articulatory distribution</p>
+      </div>
+
+      <!-- Action Panel: Recognize or Enroll -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        
+        <!-- Box A: Recognize Voice -->
+        <div class="border border-zinc-800 rounded-lg p-4 bg-zinc-950/40 space-y-3 flex flex-col justify-between">
+          <div>
+            <div class="text-xs font-mono uppercase tracking-wider text-zinc-300 font-semibold mb-1">Mode 1: Recognize Voice</div>
+            <p class="text-xs text-zinc-400">Speak the displayed sentence to match your voice against all enrolled speaker fingerprints.</p>
+          </div>
+          <div class="space-y-2 pt-2">
+            <button id="btnRecogStart" onclick="startRecognitionRecord()" class="w-full bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs py-2 rounded transition flex items-center justify-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-red-500"></span>
+              <span id="btnRecogLabel">Record & Identify Voice</span>
+            </button>
+            <div id="recogTimer" class="hidden text-center font-mono text-xs text-red-400 font-bold">REC 00:00</div>
+          </div>
+        </div>
+
+        <!-- Box B: Enroll New Speaker -->
+        <div class="border border-zinc-800 rounded-lg p-4 bg-zinc-950/40 space-y-3">
+          <div>
+            <div class="text-xs font-mono uppercase tracking-wider text-zinc-300 font-semibold mb-1">Mode 2: Enroll New Speaker</div>
+            <p class="text-xs text-zinc-400">Register a new voice profile into the biometric database.</p>
+          </div>
+          <div class="space-y-2">
+            <input type="text" id="speakerNameInput" placeholder="Speaker Name (e.g. Dhruv)" class="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-600 font-mono">
+            <button id="btnEnrollStart" onclick="startEnrollRecord()" class="w-full border border-zinc-700 hover:border-zinc-500 bg-zinc-900 text-zinc-200 font-medium text-xs py-2 rounded transition flex items-center justify-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-red-500"></span>
+              <span id="btnEnrollLabel">Record & Enroll Voice</span>
+            </button>
+            <div id="enrollTimer" class="hidden text-center font-mono text-xs text-red-400 font-bold">REC 00:00</div>
+          </div>
+        </div>
+
+      </div>
     </div>
 
-    <!-- Tab 1: Clinical Evaluation -->
-    <div id="tabContent-report" class="space-y-4">
-      <div class="card-surface rounded-lg p-5 space-y-4">
-        <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-          <div class="text-xs font-mono uppercase tracking-wider text-zinc-400 font-semibold">ASHA / Praat Normative Comparison</div>
-          <span id="evalOverallHealth" class="text-xs text-zinc-400 font-mono">Evaluated vs standard acoustic criteria</span>
-        </div>
+    <!-- Recognition Result Display Card -->
+    <div id="recogResultCard" class="hidden card-surface rounded-xl p-5 space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <span class="text-xs font-mono uppercase tracking-wider text-zinc-400 font-semibold">Biometric Identification Result</span>
+        <span id="recogMatchBadge" class="text-xs font-mono px-2 py-0.5 rounded border border-zinc-700 text-zinc-200 font-bold">AUTHENTICATED</span>
+      </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          <div class="space-y-2 border border-zinc-800/80 rounded p-3 bg-zinc-950/40">
-            <div class="text-[11px] font-mono uppercase text-zinc-500 font-semibold">Vocal Stability Thresholds</div>
-            <div class="flex justify-between py-1 border-b border-zinc-900"><span>Jitter (local, %):</span><span id="repJitter" class="font-mono text-zinc-200">1.29%</span></div>
-            <div class="flex justify-between py-1 border-b border-zinc-900"><span>Shimmer (local, %):</span><span id="repShimmer" class="font-mono text-zinc-200">14.75%</span></div>
-            <div class="flex justify-between py-1 border-b border-zinc-900"><span>Harmonics-to-Noise Ratio:</span><span id="repHNR" class="font-mono text-zinc-200">10.99 dB</span></div>
-            <div class="flex justify-between py-1"><span>Continuous CPPS:</span><span id="repCPPS" class="font-mono text-zinc-200">34.93 dB [Pass]</span></div>
-          </div>
-
-          <div class="space-y-2 border border-zinc-800/80 rounded p-3 bg-zinc-950/40">
-            <div class="text-[11px] font-mono uppercase text-zinc-500 font-semibold">Resonance & Glottal Source</div>
-            <div class="flex justify-between py-1 border-b border-zinc-900"><span>Glottal Flow NAQ:</span><span id="repNAQ" class="font-mono text-zinc-200">0.092</span></div>
-            <div class="flex justify-between py-1 border-b border-zinc-900"><span>Vocal Tract Length:</span><span id="repVTL" class="font-mono text-zinc-200">17.2 cm</span></div>
-            <div class="flex justify-between py-1 border-b border-zinc-900"><span>Prosodic Style:</span><span id="repProsody" class="font-mono text-zinc-200">Dynamic</span></div>
-            <div class="flex justify-between py-1"><span>Phonetic VSA:</span><span id="repVSA" class="font-mono text-zinc-200">111,332 Hz²</span></div>
-          </div>
-        </div>
-
+      <div class="p-4 rounded-lg bg-zinc-950 border border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div>
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">Narrative Synthesis</span>
-            <button onclick="copyReportText()" class="text-xs text-zinc-400 hover:text-zinc-200 underline font-mono">Copy Report</button>
-          </div>
-          <pre id="rawReportText" class="p-3.5 rounded bg-zinc-950 border border-zinc-800 font-mono text-xs text-zinc-300 leading-relaxed overflow-x-auto"></pre>
+          <div class="text-xs text-zinc-500 uppercase font-mono">Identified Speaker</div>
+          <div id="recogSpeakerName" class="text-2xl font-bold text-zinc-100 font-mono mt-1">Dhruv</div>
+          <div id="recogMessage" class="text-xs text-zinc-400 mt-1">Matched with 98.4% biometric confidence.</div>
+        </div>
+        <div class="text-right">
+          <div class="text-xs text-zinc-500 uppercase font-mono">Confidence Score</div>
+          <div id="recogScore" class="text-3xl font-mono font-bold text-zinc-100">98.4%</div>
         </div>
       </div>
-    </div>
 
-    <!-- Tab 2: 6-Panel Diagnostic Visualizer -->
-    <div id="tabContent-visual" class="hidden space-y-3">
-      <div class="card-surface rounded-lg p-4 flex flex-col items-center">
-        <div class="w-full flex justify-between items-center mb-3">
-          <span class="text-xs font-mono uppercase tracking-wider text-zinc-400 font-semibold">6-Panel High-Resolution Acoustic Dashboard</span>
-          <a id="btnDownloadImg" href="/api/image?file=voice_dashboard.png" download="voice_dashboard.png" class="border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-xs px-3 py-1 rounded text-zinc-200 transition font-mono">
-            Download PNG
-          </a>
-        </div>
-        <div class="w-full border border-zinc-800 rounded bg-zinc-950 p-1 flex justify-center">
-          <img id="dashboardImg" src="/api/image?file=voice_dashboard.png" alt="6-Panel Diagnostic Dashboard" class="max-w-full h-auto rounded">
-        </div>
-      </div>
-    </div>
-
-    <!-- Tab 3: Dataset Archive -->
-    <div id="tabContent-dataset" class="hidden space-y-3">
-      <div class="card-surface rounded-lg p-4 space-y-3">
-        <div class="flex justify-between items-center">
-          <span class="text-xs font-mono uppercase tracking-wider text-zinc-400 font-semibold">voice_dataset.csv Archive</span>
-          <a href="/voice_dataset.csv" download class="border border-zinc-800 hover:border-zinc-700 text-xs px-2.5 py-1 rounded font-mono text-zinc-300 transition">Download CSV</a>
-        </div>
+      <!-- Candidate Rankings Table -->
+      <div>
+        <div class="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">Candidate Comparison Rankings</div>
         <div class="overflow-x-auto border border-zinc-800 rounded">
-          <table class="min-w-full text-xs text-left text-zinc-300 font-mono">
+          <table class="min-w-full text-xs font-mono text-left text-zinc-300">
             <thead class="bg-zinc-950 text-zinc-500 uppercase border-b border-zinc-800">
               <tr>
-                <th class="px-3 py-2">File</th>
-                <th class="px-3 py-2">Speaker</th>
-                <th class="px-3 py-2">VTL</th>
-                <th class="px-3 py-2">f0 (Hz)</th>
-                <th class="px-3 py-2">F1</th>
-                <th class="px-3 py-2">F2</th>
-                <th class="px-3 py-2">Jitter%</th>
-                <th class="px-3 py-2">HNR</th>
-                <th class="px-3 py-2">CPPS</th>
-                <th class="px-3 py-2">Assessment</th>
+                <th class="px-3 py-2">Candidate Name</th>
+                <th class="px-3 py-2">Cosine Similarity</th>
+                <th class="px-3 py-2">Match Confidence</th>
+                <th class="px-3 py-2">Enrolled Pitch</th>
+                <th class="px-3 py-2">Status</th>
               </tr>
             </thead>
-            <tbody id="datasetTableBody" class="divide-y divide-zinc-900"></tbody>
+            <tbody id="recogCandidatesBody" class="divide-y divide-zinc-900"></tbody>
           </table>
         </div>
       </div>
     </div>
 
-  </main>
+    <!-- Enrolled Speakers Table -->
+    <div class="card-surface rounded-xl p-5 space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-mono uppercase tracking-wider text-zinc-400 font-semibold">Enrolled Biometric Profiles (<span id="enrolledCount">0</span>)</span>
+      </div>
+      <div class="overflow-x-auto border border-zinc-800 rounded">
+        <table class="min-w-full text-xs font-mono text-left text-zinc-300">
+          <thead class="bg-zinc-950 text-zinc-500 uppercase border-b border-zinc-800">
+            <tr>
+              <th class="px-3 py-2">Speaker Name</th>
+              <th class="px-3 py-2">Enrolled Date</th>
+              <th class="px-3 py-2">Pitch (f0)</th>
+              <th class="px-3 py-2">Sample Clip</th>
+              <th class="px-3 py-2 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="enrolledSpeakersBody" class="divide-y divide-zinc-900"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- VIEW 3: ACOUSTIC INFO GUIDE                                    -->
+  <!-- ============================================================== -->
+  <div id="view-info" class="hidden flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
+
+    <div class="card-surface rounded-xl p-6 space-y-6">
+      <div class="border-b border-zinc-800 pb-3">
+        <h2 class="text-base font-bold text-zinc-100 uppercase tracking-wider font-mono">Acoustic Metrics & Biometrics Reference Guide</h2>
+        <p class="text-xs text-zinc-400 mt-1">Detailed physical and clinical definitions of every metric, ratio, and threshold extracted by vox-dsp.</p>
+      </div>
+
+      <!-- Section 1: Pitch & Glottal Source -->
+      <div class="space-y-3">
+        <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
+          01 / Glottal Fundamental Frequency ($f_0$) & Prosody
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs leading-relaxed text-zinc-400">
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Fundamental Frequency ($f_0$):</strong>
+            The rate at which the vocal folds open and close per second (measured in Hertz). 
+            <ul class="list-disc list-inside mt-1 text-zinc-400 space-y-0.5">
+              <li><strong>Adult Male:</strong> 85 – 155 Hz (Sample speaker: ~117.1 Hz).</li>
+              <li><strong>Adult Female:</strong> 165 – 255 Hz.</li>
+              <li><strong>Child:</strong> 250 – 400+ Hz.</li>
+            </ul>
+          </div>
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Prosodic Pitch Range (Semitones):</strong>
+            The logarithmic pitch dynamic width: 12 * log2(f0_max / f0_min).
+            <ul class="list-disc list-inside mt-1 text-zinc-400 space-y-0.5">
+              <li><strong>&lt; 3.0 semitones:</strong> Monotone, flat, or depressed speech delivery.</li>
+              <li><strong>3.0 – 9.0 semitones:</strong> Typical conversational intonation.</li>
+              <li><strong>&gt; 9.0 semitones:</strong> Highly expressive, emotive, or animated delivery.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Vocal Tract & Formants -->
+      <div class="space-y-3">
+        <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
+          02 / Vocal Tract Formants ($F_1, F_2, F_3$) & VSA
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs leading-relaxed text-zinc-400">
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">First Formant ($F_1$):</strong>
+            Controlled by <strong>jaw opening</strong> and pharyngeal cavity size:
+            <ul class="list-disc list-inside mt-1 space-y-0.5">
+              <li><strong>High $F_1$ (600–800 Hz):</strong> Open jaw (/ɑ/, /æ/, /ʌ/).</li>
+              <li><strong>Low $F_1$ (250–350 Hz):</strong> Closed jaw / high tongue (/i/, /u/).</li>
+            </ul>
+          </div>
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Second Formant ($F_2$):</strong>
+            Controlled by <strong>tongue position (front vs. back)</strong>:
+            <ul class="list-disc list-inside mt-1 space-y-0.5">
+              <li><strong>High $F_2$ (1800–2400 Hz):</strong> Front tongue (/i/, /e/).</li>
+              <li><strong>Low $F_2$ (800–1200 Hz):</strong> Back tongue (/u/, /o/, /ɑ/).</li>
+            </ul>
+          </div>
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Vowel Space Area (VSA):</strong>
+            The geometric area ($\text{Hz}^2$) bounded by corner vowel formants (/i/, /u/, /æ/, /ɑ/). Larger VSA indicates clear articulatory precision; compressed VSA is a biomarker for dysarthria or speech fatigue.
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Clinical Perturbation -->
+      <div class="space-y-3">
+        <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
+          03 / Clinical Perturbation & Dysphonia (ASHA Criteria)
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs leading-relaxed text-zinc-400">
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Jitter (local, %): Cycle-to-Cycle Pitch Perturbation</strong>
+            Measures microscopic variations in consecutive vocal fold vibration periods.
+            <ul class="list-disc list-inside mt-1 space-y-0.5">
+              <li><strong>&lt; 1.04%:</strong> Normal sustained modal phonation.</li>
+              <li><strong>&gt; 1.50%:</strong> Elevated frequency perturbation (vocal roughness, fatigue, or polyp).</li>
+            </ul>
+          </div>
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Shimmer (local, %): Cycle-to-Cycle Amplitude Perturbation</strong>
+            Measures microscopic fluctuations in peak acoustic pressure from cycle to cycle.
+            <ul class="list-disc list-inside mt-1 space-y-0.5">
+              <li><strong>&lt; 3.81%:</strong> Normal sustained phonation.</li>
+              <li><strong>&gt; 5.50%:</strong> Elevated amplitude variation (incomplete glottal closure, breathiness).</li>
+            </ul>
+          </div>
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Harmonics-to-Noise Ratio (HNR, dB):</strong>
+            Quantifies the ratio of periodic harmonic energy produced by the vocal folds to turbulent aspiration noise:
+            <ul class="list-disc list-inside mt-1 space-y-0.5">
+              <li><strong>&gt; 15.0 – 20.0 dB:</strong> Clean harmonic purity with negligible air turbulence.</li>
+              <li><strong>&lt; 11.0 dB:</strong> Significant turbulent aspiration noise or hoarseness.</li>
+            </ul>
+          </div>
+          <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded space-y-1">
+            <strong class="text-zinc-200 block text-xs">Cepstral Peak Prominence (CPPS, dB):</strong>
+            The modern ASHA gold standard for dysphonia in <em>continuous conversational speech</em>. Measures the prominence of the harmonic quefrency peak above a regression baseline. Values <strong>&gt; 10.0 dB</strong> confirm clear periodic vocal fold vibration.
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: Vocal Tract Length Normalization -->
+      <div class="space-y-3">
+        <div class="text-xs font-mono uppercase tracking-widest text-zinc-400 font-bold border-l-2 border-zinc-400 pl-2">
+          04 / Vocal Tract Length (VTL) & Dynamic LPC Modeling
+        </div>
+        <div class="p-3.5 bg-zinc-950 border border-zinc-800 rounded text-xs leading-relaxed text-zinc-400 space-y-1.5">
+          <p>The pipeline models the vocal tract as an acoustic tube with closed glottis and open lips. Using Fitch's formant dispersion formula:
+          L ≈ (1/K) * Σ (2n - 1)c / (4 * Fn) (where c = 34,300 cm/s), the physical length is estimated.</p>
+          <p>Rather than using a static filter order, the Linear Predictive Coding (LPC) order is dynamically computed as p ≈ 2 * (L * fs / c) + 2. For an adult male (~17.2 cm), p = 18 provides optimal pole capacity without splitting resonances.</p>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
 
   <footer class="border-t border-zinc-800/60 py-3 text-center text-xs font-mono text-zinc-600">
-    vox-dsp / minimal acoustic biometrics
+    vox-dsp / minimal acoustic biometrics & speaker recognition
   </footer>
 
   <script>
     let currentProfile = null;
+    let sentencesList = [];
+    let currentSentenceIndex = 0;
+
+    // Mic recording state
     let mediaStream = null;
     let audioContext = null;
     let mediaRecorder = null;
     let recordedChunks = [];
     let recordInterval = null;
     let recordSeconds = 0;
-    let micAnalyser = null;
     let animFrame = null;
+    let micAnalyser = null;
+    let activeRecMode = 'dashboard'; // 'dashboard', 'recognition', 'enroll'
 
-    async function loadInitialData() {
+    async function initApp() {
       await refreshFileList();
+      await loadSentences();
+      await loadEnrolledSpeakers();
       updateActiveAudio();
       triggerAnalyze();
       loadDatasetTable();
+    }
+
+    // Top-Level Navigation
+    function switchView(viewId) {
+      ['dashboard', 'recognition', 'info'].forEach(v => {
+        document.getElementById(`view-${v}`).classList.add('hidden');
+        document.getElementById(`nav-${v}`).className = 'py-4 text-zinc-500 hover:text-zinc-300';
+      });
+      document.getElementById(`view-${viewId}`).classList.remove('hidden');
+      document.getElementById(`nav-${viewId}`).className = 'py-4 nav-btn-active';
+
+      const actions = document.getElementById('headerQuickActions');
+      if (viewId === 'dashboard') actions.classList.remove('hidden');
+      else actions.classList.add('hidden');
+    }
+
+    // Sub-Tabs in Dashboard
+    function switchDashTab(tabId) {
+      ['report', 'visual', 'dataset'].forEach(t => {
+        document.getElementById(`tabContent-${t}`).classList.add('hidden');
+        document.getElementById(`tabBtn-${t}`).className = 'py-2.5 text-zinc-500 hover:text-zinc-300';
+      });
+      document.getElementById(`tabContent-${tabId}`).classList.remove('hidden');
+      document.getElementById(`tabBtn-${tabId}`).className = 'py-2.5 nav-btn-active';
     }
 
     async function refreshFileList() {
@@ -367,7 +621,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     async function triggerAnalyze() {
       const file = document.getElementById('fileSelect').value || 'voice.wav';
       const btn = document.getElementById('btnAnalyze');
-      btn.textContent = 'Analyzing...';
+      btn.textContent = '...';
       btn.disabled = true;
 
       try {
@@ -378,7 +632,7 @@ HTML_CONTENT = """<!DOCTYPE html>
       } catch (err) {
         alert('Analysis error: ' + err);
       } finally {
-        btn.textContent = 'Run Analysis';
+        btn.textContent = 'Analyze';
         btn.disabled = false;
       }
     }
@@ -393,7 +647,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 
       document.getElementById('activeDurationLabel').textContent = `${data.duration_s || 0}s @ ${data.sampling_rate || 16000}Hz`;
 
-      // Cards
       document.getElementById('cardSpeaker').textContent = demo.demographic_class || 'Adult Male';
       document.getElementById('cardVTL').textContent = `${demo.vocal_tract_length_cm || 17.2} cm`;
       document.getElementById('cardLPCOrder').textContent = demo.adapted_lpc_order || 18;
@@ -409,11 +662,8 @@ HTML_CONTENT = """<!DOCTYPE html>
       document.getElementById('cardJitter').textContent = `${clinical.jitter_local_percent || 0}%`;
       document.getElementById('cardHNR').textContent = `${clinical.hnr_db || 0} dB`;
       document.getElementById('cardCPPS').textContent = `${cont.cpps_db || 0} dB`;
+      document.getElementById('cardStatusBadge').textContent = (diag.jitter_flag || 'NORMAL').toUpperCase();
 
-      const badge = document.getElementById('cardStatusBadge');
-      badge.textContent = (diag.jitter_flag || 'NORMAL').toUpperCase();
-
-      // Report Tab
       document.getElementById('evalOverallHealth').textContent = diag.overall_health || '';
       document.getElementById('repJitter').textContent = `${clinical.jitter_local_percent}% [${diag.jitter_flag || 'Pass'}]`;
       document.getElementById('repShimmer').textContent = `${clinical.shimmer_local_percent}% [${diag.shimmer_flag || 'Pass'}]`;
@@ -436,7 +686,7 @@ HTML_CONTENT = """<!DOCTYPE html>
       const data = await res.json();
       img.src = `${data.image_url}&t=${Date.now()}`;
       img.style.opacity = '1.0';
-      switchTab('visual');
+      switchDashTab('visual');
     }
 
     async function loadDatasetTable() {
@@ -468,24 +718,6 @@ HTML_CONTENT = """<!DOCTYPE html>
       }
     }
 
-    function switchTab(tabId) {
-      ['report', 'visual', 'dataset'].forEach(t => {
-        document.getElementById(`tabContent-${t}`).classList.add('hidden');
-        document.getElementById(`tabBtn-${t}`).className = 'py-2.5 text-zinc-500 hover:text-zinc-300';
-      });
-      document.getElementById(`tabContent-${tabId}`).classList.remove('hidden');
-      document.getElementById(`tabBtn-${tabId}`).className = 'py-2.5 tab-active';
-    }
-
-    function exportJSON() {
-      if (!currentProfile) return;
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentProfile, null, 2));
-      const dlAnchor = document.createElement('a');
-      dlAnchor.setAttribute("href", dataStr);
-      dlAnchor.setAttribute("download", `profile_${currentProfile.file || 'voice'}.json`);
-      dlAnchor.click();
-    }
-
     function copyReportText() {
       const text = document.getElementById('rawReportText').textContent;
       navigator.clipboard.writeText(text);
@@ -493,7 +725,73 @@ HTML_CONTENT = """<!DOCTYPE html>
     }
 
     // -------------------------------------------------------------
-    // LIVE MICROPHONE RECORDING LOGIC
+    // VOICE RECOGNITION & PRE-WRITTEN SENTENCES
+    // -------------------------------------------------------------
+    async function loadSentences() {
+      try {
+        const res = await fetch('/api/recognition/sentences');
+        sentencesList = await res.json();
+        if (sentencesList.length > 0) {
+          currentSentenceIndex = 0;
+          displaySentence();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function displaySentence() {
+      if (!sentencesList.length) return;
+      const s = sentencesList[currentSentenceIndex];
+      document.getElementById('promptCategory').textContent = s.category;
+      document.getElementById('promptText').textContent = `"${s.text}"`;
+      document.getElementById('promptFocus').textContent = `Phonetic Focus: ${s.phonetic_focus}`;
+    }
+
+    function cycleSentence() {
+      if (!sentencesList.length) return;
+      currentSentenceIndex = (currentSentenceIndex + 1) % sentencesList.length;
+      displaySentence();
+    }
+
+    async function loadEnrolledSpeakers() {
+      try {
+        const res = await fetch('/api/recognition/speakers');
+        const speakers = await res.json();
+        document.getElementById('enrolledCount').textContent = speakers.length;
+        const tbody = document.getElementById('enrolledSpeakersBody');
+        tbody.innerHTML = '';
+        if (speakers.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-3 text-center text-zinc-500 italic">No speakers enrolled yet. Use Mode 2 to register a voice profile.</td></tr>';
+          return;
+        }
+        speakers.forEach(s => {
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-zinc-900/60 transition';
+          tr.innerHTML = `
+            <td class="px-3 py-2 text-zinc-100 font-semibold">${s.name}</td>
+            <td class="px-3 py-2 text-zinc-400">${s.enrolled_at || ''}</td>
+            <td class="px-3 py-2 text-zinc-300 font-mono">${s.median_f0 ? s.median_f0.toFixed(1) + ' Hz' : 'N/A'}</td>
+            <td class="px-3 py-2 text-zinc-400 font-mono">${s.sample_file || ''}</td>
+            <td class="px-3 py-2 text-right">
+              <button onclick="deleteSpeaker('${encodeURIComponent(s.name)}')" class="text-zinc-500 hover:text-red-400 text-xs underline font-mono">Delete</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function deleteSpeaker(name) {
+      if (!confirm(`Delete voice profile for '${decodeURIComponent(name)}'?`)) return;
+      await fetch(`/api/recognition/speaker?name=${name}`, { method: 'DELETE' });
+      await loadEnrolledSpeakers();
+    }
+
+    // -------------------------------------------------------------
+    // MICROPHONE CAPTURE & WAV CONVERTER
     // -------------------------------------------------------------
     function toggleRecordDrawer() {
       const drawer = document.getElementById('recordingDrawer');
@@ -504,19 +802,87 @@ HTML_CONTENT = """<!DOCTYPE html>
     }
 
     async function startMicRecording() {
-      try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
-      } catch (err) {
-        alert('Microphone access denied or unavailable: ' + err.message);
+      activeRecMode = 'dashboard';
+      await startGenericAudioStream();
+      document.getElementById('btnStartRec').disabled = true;
+      document.getElementById('btnStartRec').classList.add('opacity-50');
+      document.getElementById('btnStopRec').disabled = false;
+      document.getElementById('btnStopRec').classList.remove('opacity-50', 'cursor-not-allowed');
+      document.getElementById('recStatusLabel').textContent = 'Recording in progress...';
+    }
+
+    async function stopMicRecording() {
+      const wavBlob = await stopGenericAudioStream();
+      document.getElementById('btnStartRec').disabled = false;
+      document.getElementById('btnStartRec').classList.remove('opacity-50');
+      document.getElementById('btnStopRec').textContent = 'Stop & Analyze';
+      document.getElementById('recStatusLabel').textContent = 'Analyzed & Saved';
+
+      const filename = `recording_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.wav`;
+      await uploadAndAnalyzeAudioBlob(wavBlob, filename);
+    }
+
+    // Recognition Recording Mode
+    async function startRecognitionRecord() {
+      const btn = document.getElementById('btnRecogStart');
+      const timer = document.getElementById('recogTimer');
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        // Stop & Identify
+        btn.textContent = 'Processing & Identifying Voice...';
+        btn.disabled = true;
+        const wavBlob = await stopGenericAudioStream();
+        timer.classList.add('hidden');
+        btn.textContent = 'Record & Identify Voice';
+        btn.disabled = false;
+
+        await identifyVoiceBlob(wavBlob);
+      } else {
+        // Start
+        activeRecMode = 'recognition';
+        await startGenericAudioStream(timer);
+        btn.textContent = 'Stop & Identify Speaker';
+        btn.className = 'w-full bg-red-600 hover:bg-red-700 text-white font-semibold text-xs py-2 rounded transition flex items-center justify-center gap-2';
+      }
+    }
+
+    // Enrollment Recording Mode
+    async function startEnrollRecord() {
+      const name = document.getElementById('speakerNameInput').value.trim();
+      if (!name) {
+        alert('Please enter a speaker name before enrolling.');
         return;
       }
 
+      const btn = document.getElementById('btnEnrollStart');
+      const timer = document.getElementById('enrollTimer');
+
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        btn.textContent = 'Enrolling Profile...';
+        btn.disabled = true;
+        const wavBlob = await stopGenericAudioStream();
+        timer.classList.add('hidden');
+        btn.textContent = 'Record & Enroll Voice';
+        btn.disabled = false;
+
+        await enrollVoiceBlob(wavBlob, name);
+      } else {
+        activeRecMode = 'enroll';
+        await startGenericAudioStream(timer);
+        btn.textContent = 'Stop & Save Voice Profile';
+        btn.className = 'w-full bg-red-600 hover:bg-red-700 text-white font-semibold text-xs py-2 rounded transition flex items-center justify-center gap-2';
+      }
+    }
+
+    async function startGenericAudioStream(timerElem = null) {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioContext.createMediaStreamSource(mediaStream);
       micAnalyser = audioContext.createAnalyser();
       micAnalyser.fftSize = 256;
       source.connect(micAnalyser);
-      drawMicVisualizer();
+
+      const canvas = document.getElementById('micCanvas');
+      if (canvas) drawMicVisualizer();
 
       recordedChunks = [];
       mediaRecorder = new MediaRecorder(mediaStream);
@@ -524,55 +890,42 @@ HTML_CONTENT = """<!DOCTYPE html>
       mediaRecorder.start(100);
 
       recordSeconds = 0;
-      document.getElementById('recTimer').textContent = '00:00';
+      if (timerElem) {
+        timerElem.classList.remove('hidden');
+        timerElem.textContent = 'REC 00:00';
+      }
+      clearInterval(recordInterval);
       recordInterval = setInterval(() => {
         recordSeconds++;
         const m = String(Math.floor(recordSeconds / 60)).padStart(2, '0');
         const s = String(recordSeconds % 60).padStart(2, '0');
-        document.getElementById('recTimer').textContent = `${m}:${s}`;
+        const tStr = `${m}:${s}`;
+        document.getElementById('recTimer').textContent = tStr;
+        if (timerElem) timerElem.textContent = `REC ${tStr}`;
       }, 1000);
-
-      document.getElementById('btnStartRec').disabled = true;
-      document.getElementById('btnStartRec').classList.add('opacity-50');
-      document.getElementById('btnStopRec').disabled = false;
-      document.getElementById('btnStopRec').classList.remove('opacity-50', 'cursor-not-allowed');
-      document.getElementById('recStatusLabel').textContent = 'Recording in progress...';
-      document.getElementById('recStatusLabel').className = 'text-xs uppercase tracking-wider font-mono text-red-500 font-semibold';
     }
 
-    async function stopMicRecording() {
-      if (!mediaRecorder) return;
+    async function stopGenericAudioStream() {
       clearInterval(recordInterval);
       if (animFrame) cancelAnimationFrame(animFrame);
 
-      document.getElementById('btnStopRec').textContent = 'Processing...';
-      document.getElementById('btnStopRec').disabled = true;
+      return new Promise(resolve => {
+        mediaRecorder.onstop = async () => {
+          const rawBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+          mediaStream.getTracks().forEach(t => t.stop());
 
-      mediaRecorder.onstop = async () => {
-        const rawBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
-        mediaStream.getTracks().forEach(t => t.stop());
-
-        // Decode audio to standard 16-bit PCM WAV
-        const arrayBuf = await rawBlob.arrayBuffer();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuf);
-        const wavBlob = audioBufferToWav(audioBuffer);
-
-        const filename = `recording_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.wav`;
-        await uploadAndAnalyzeAudioBlob(wavBlob, filename);
-
-        // Reset drawer state
-        document.getElementById('btnStartRec').disabled = false;
-        document.getElementById('btnStartRec').classList.remove('opacity-50');
-        document.getElementById('btnStopRec').textContent = 'Stop & Analyze';
-        document.getElementById('recStatusLabel').textContent = 'Saved and Analyzed';
-        document.getElementById('recStatusLabel').className = 'text-xs uppercase tracking-wider font-mono text-zinc-400 font-semibold';
-      };
-
-      mediaRecorder.stop();
+          const arrayBuf = await rawBlob.arrayBuffer();
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuf);
+          const wavBlob = audioBufferToWav(audioBuffer);
+          resolve(wavBlob);
+        };
+        mediaRecorder.stop();
+      });
     }
 
     function drawMicVisualizer() {
       const canvas = document.getElementById('micCanvas');
+      if (!canvas) return;
       const ctx = canvas.getContext('2d');
       const bufferLength = micAnalyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
@@ -590,7 +943,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         const sliceWidth = canvas.width / bufferLength;
         let x = 0;
-
         for (let i = 0; i < bufferLength; i++) {
           const v = dataArray[i] / 128.0;
           const y = (v * canvas.height) / 2;
@@ -598,33 +950,32 @@ HTML_CONTENT = """<!DOCTYPE html>
           else ctx.lineTo(x, y);
           x += sliceWidth;
         }
-
         ctx.lineTo(canvas.width, canvas.height / 2);
         ctx.stroke();
       }
       draw();
     }
 
-    // Helper: Convert AudioBuffer to 16-bit PCM WAV Blob
     function audioBufferToWav(buffer) {
-      const numChannels = 1; // mono
+      const numChannels = 1;
       const sampleRate = buffer.sampleRate;
       const format = 1; // PCM
       const bitDepth = 16;
-      
       const channelData = buffer.getChannelData(0);
       const dataLength = channelData.length * (bitDepth / 8);
       const bufferLength = 44 + dataLength;
-      
+
       const arrayBuffer = new ArrayBuffer(bufferLength);
       const view = new DataView(arrayBuffer);
-      
-      // RIFF identifier
-      writeString(view, 0, 'RIFF');
+
+      function writeStr(offset, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      }
+
+      writeStr(0, 'RIFF');
       view.setUint32(4, 36 + dataLength, true);
-      writeString(view, 8, 'WAVE');
-      // fmt sub-chunk
-      writeString(view, 12, 'fmt ');
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
       view.setUint32(16, 16, true);
       view.setUint16(20, format, true);
       view.setUint16(22, numChannels, true);
@@ -632,11 +983,9 @@ HTML_CONTENT = """<!DOCTYPE html>
       view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
       view.setUint16(32, numChannels * (bitDepth / 8), true);
       view.setUint16(34, bitDepth, true);
-      // data sub-chunk
-      writeString(view, 36, 'data');
+      writeStr(36, 'data');
       view.setUint32(40, dataLength, true);
-      
-      // Write 16-bit samples
+
       let offset = 44;
       for (let i = 0; i < channelData.length; i++) {
         let sample = Math.max(-1, Math.min(1, channelData[i]));
@@ -647,12 +996,6 @@ HTML_CONTENT = """<!DOCTYPE html>
       return new Blob([view], { type: 'audio/wav' });
     }
 
-    function writeString(view, offset, string) {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
-    }
-
     async function handleFileUpload(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -660,9 +1003,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     }
 
     async function uploadAndAnalyzeAudioBlob(blob, filename) {
-      const formData = new FormData();
-      formData.append('audio', blob, filename);
-
       try {
         const res = await fetch('/api/upload', {
           method: 'POST',
@@ -670,7 +1010,6 @@ HTML_CONTENT = """<!DOCTYPE html>
           body: blob
         });
         const result = await res.json();
-        
         await refreshFileList();
         document.getElementById('fileSelect').value = result.filename;
         updateActiveAudio();
@@ -678,11 +1017,73 @@ HTML_CONTENT = """<!DOCTYPE html>
         populateDashboard(result.profile);
         loadDatasetTable();
       } catch (err) {
-        alert('Upload/Analysis failed: ' + err);
+        alert('Upload/Analysis error: ' + err);
       }
     }
 
-    window.addEventListener('DOMContentLoaded', loadInitialData);
+    async function identifyVoiceBlob(blob) {
+      const card = document.getElementById('recogResultCard');
+      card.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/recognition/identify', {
+          method: 'POST',
+          body: blob
+        });
+        const result = await res.json();
+
+        document.getElementById('recogSpeakerName').textContent = result.speaker;
+        document.getElementById('recogScore').textContent = `${result.confidence_percent}%`;
+        document.getElementById('recogMessage').textContent = result.message;
+
+        const badge = document.getElementById('recogMatchBadge');
+        if (result.matched) {
+          badge.textContent = 'AUTHENTICATED';
+          badge.className = 'text-xs font-mono px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-400 font-bold';
+        } else {
+          badge.textContent = 'UNVERIFIED';
+          badge.className = 'text-xs font-mono px-2 py-0.5 rounded border border-amber-500/40 text-amber-400 font-bold';
+        }
+
+        const tbody = document.getElementById('recogCandidatesBody');
+        tbody.innerHTML = '';
+        (result.candidates || []).forEach(c => {
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-zinc-900/60 transition';
+          tr.innerHTML = `
+            <td class="px-3 py-2 text-zinc-100 font-semibold">${c.name}</td>
+            <td class="px-3 py-2">${c.similarity}</td>
+            <td class="px-3 py-2 font-bold">${c.confidence_percent}%</td>
+            <td class="px-3 py-2 text-zinc-400">${c.meta && c.meta.median_f0 ? c.meta.median_f0.toFixed(1) + ' Hz' : 'N/A'}</td>
+            <td class="px-3 py-2">${c.similarity >= (result.threshold || 0.75) ? '<span class="text-emerald-400 font-semibold">Match</span>' : '<span class="text-zinc-500">Below threshold</span>'}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+      } catch (err) {
+        alert('Recognition error: ' + err);
+      }
+    }
+
+    async function enrollVoiceBlob(blob, name) {
+      const sentenceText = sentencesList[currentSentenceIndex] ? sentencesList[currentSentenceIndex].text : '';
+      try {
+        const res = await fetch(`/api/recognition/enroll?name=${encodeURIComponent(name)}`, {
+          method: 'POST',
+          headers: { 'X-Sentence': encodeURIComponent(sentenceText) },
+          body: blob
+        });
+        const result = await res.json();
+        alert(`Speaker '${name}' successfully enrolled into biometric database!`);
+        document.getElementById('speakerNameInput').value = '';
+        await loadEnrolledSpeakers();
+        await refreshFileList();
+      } catch (err) {
+        alert('Enrollment error: ' + err);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', initApp);
   </script>
 </body>
 </html>
@@ -803,13 +1204,26 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        # 9. Voice Recognition: Get Pre-written Sentences
+        if path == "/api/recognition/sentences":
+            sentences = get_all_sentences()
+            self.send_json(sentences)
+            return
+
+        # 10. Voice Recognition: List Enrolled Speakers
+        if path == "/api/recognition/speakers":
+            speakers = default_db.list_speakers()
+            self.send_json(speakers)
+            return
+
         self.send_error(404, "Not found")
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        params = urllib.parse.parse_qs(parsed.query)
 
-        # In-Browser Live Recording / Upload Endpoint
+        # 1. Upload for General DSP Analysis
         if path == "/api/upload":
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
@@ -817,8 +1231,6 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             body = self.rfile.read(content_length)
-
-            # Extract filename from header or generate timestamped name
             raw_filename = self.headers.get("X-Filename", "")
             if raw_filename:
                 filename = os.path.basename(urllib.parse.unquote(raw_filename))
@@ -832,17 +1244,14 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             with open(file_path, "wb") as f:
                 f.write(body)
 
-            # Immediate analysis of the recorded audio
             try:
                 profile, flat = analyze_audio_signal(file_path)
                 report_text = generate_voice_diagnostic_report(profile)
                 profile["report_text"] = report_text
 
-                # Update dataset CSV
                 csv_path = os.path.join(WORKSPACE_DIR, "voice_dataset.csv")
                 save_rows_to_csv([flat], csv_path)
 
-                # Generate updated 6-panel dashboard PNG for the new voice recording
                 save_img = os.path.join(WORKSPACE_DIR, "voice_dashboard.png")
                 try:
                     render_voice_dashboard(file_path, save_img, show=False)
@@ -858,6 +1267,67 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 2. Voice Recognition: Enroll Speaker
+        if path == "/api/recognition/enroll":
+            name = params.get("name", [""])[0]
+            if not name:
+                self.send_error(400, "Missing speaker name")
+                return
+
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+
+            sentence_text = urllib.parse.unquote(self.headers.get("X-Sentence", ""))
+            safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-")).strip()
+            filename = f"speaker_{safe_name.replace(' ', '_')}_{int(time.time())}.wav"
+            file_path = os.path.join(WORKSPACE_DIR, filename)
+
+            with open(file_path, "wb") as f:
+                f.write(body)
+
+            try:
+                enrolled = default_db.enroll_speaker(name, file_path, sentence_text)
+                self.send_json({"success": True, "speaker": enrolled})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        # 3. Voice Recognition: Identify Speaker
+        if path == "/api/recognition/identify":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+
+            temp_file = os.path.join(WORKSPACE_DIR, f"temp_recog_{int(time.time())}.wav")
+            with open(temp_file, "wb") as f:
+                f.write(body)
+
+            try:
+                result = default_db.identify_speaker(temp_file)
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                self.send_json(result)
+            except Exception as e:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                self.send_json({"matched": False, "error": str(e)}, status=500)
+            return
+
+        self.send_error(404, "Endpoint not found")
+
+    def do_DELETE(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        params = urllib.parse.parse_qs(parsed.query)
+
+        if path == "/api/recognition/speaker":
+            name = params.get("name", [""])[0]
+            if not name:
+                self.send_error(400, "Missing speaker name")
+                return
+            deleted = default_db.delete_speaker(urllib.parse.unquote(name))
+            self.send_json({"success": deleted})
+            return
+
         self.send_error(404, "Endpoint not found")
 
     def log_message(self, format, *args):
@@ -868,7 +1338,7 @@ def start_server(port=PORT, open_browser=True):
     server = HTTPServer(("127.0.0.1", port), DashboardHTTPRequestHandler)
     url = f"http://localhost:{port}"
     print("=" * 65)
-    print(f"  vox-dsp Minimalist Dashboard & Recording Studio running!")
+    print(f"  vox-dsp Centralized Dashboard & Speaker Recognition Studio")
     print(f"  URL: {url}")
     print("  Press Ctrl+C to stop the dashboard server.")
     print("=" * 65)
@@ -885,7 +1355,7 @@ def start_server(port=PORT, open_browser=True):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="vox-dsp Minimalist Dashboard & Recording Server")
+    parser = argparse.ArgumentParser(description="vox-dsp Centralized Dashboard & Recognition Server")
     parser.add_argument("--port", type=int, default=PORT, help="Port to listen on (default: 8050)")
     parser.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
     args = parser.parse_args()

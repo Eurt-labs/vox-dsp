@@ -93,8 +93,13 @@ vox-dsp/
 │   ├── mfcc.py                         # 13 MFCCs, CMVN, and dynamic derivatives (Δ, Δ²)
 │   ├── biometrics.py                   # Praat Jitter, Shimmer, HNR, CPPS, and Inverse Filter
 │   └── diagnostic_engine.py           # Automated clinical thresholding & report synthesis
+├── voice_recognition/                  # Voice Recognition & Speaker Identification Package
+│   ├── __init__.py                     # Package interface
+│   ├── recognizer.py                   # 84-D dense biometric voice fingerprinting & cosine matcher
+│   ├── sentences.py                    # Pre-written phonetically balanced test sentences
+│   └── enrolled_speakers.json          # Persistent database of enrolled speaker profiles
 ├── analyze_voice.py                    # Master CLI & feature extractor (single file or batch)
-├── app.py                              # Centralized access dashboard web application
+├── app.py                              # Centralized access dashboard & live recording studio
 ├── dashboard.py                        # Unified 6-panel high-resolution visualizer
 ├── voice.wav                           # Benchmark test recording
 ├── voice_dataset.csv                   # Exported 60+ feature tabular dataset
@@ -165,6 +170,20 @@ Or directly via the master CLI:
 ```bash
 python analyze_voice.py --file voice.wav --dashboard
 ```
+
+### 5. Speaker Recognition & Biometric Identification
+Enroll a speaker and identify an unknown audio recording:
+```bash
+# Enroll a speaker voice profile
+python voice_recognition/recognizer.py --enroll "Dhruv" --file voice.wav
+
+# Identify an unknown speaker from a recording
+python voice_recognition/recognizer.py --identify voice.wav
+
+# List all enrolled speakers
+python voice_recognition/recognizer.py --list
+```
+Or interactively test live voice recognition with pre-written benchmark sentences inside the web dashboard (`python app.py` -> **Voice Recognition** tab).
 
 ---
 
