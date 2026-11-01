@@ -36,7 +36,7 @@ def render_voice_dashboard(audio_file="voice.wav", save_path="voice_dashboard.pn
     if not os.path.isfile(audio_file):
         raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
-    signal, fs = librosa.load(audio_file, sr=None, mono=True)
+    signal, fs = librosa.load(audio_file, sr=16000, mono=True)
     duration = len(signal) / fs
     times_wav = np.linspace(0, duration, len(signal))
 

@@ -62,11 +62,14 @@ class VoiceProfile(dict):
         return super().__getitem__(key)
 
 
-def load_audio(audio_path):
-    """Loads audio, normalizes, and downmixes to mono."""
+def load_audio(audio_path, target_sr=16000):
+    """Loads audio, normalizes, resamples to target_sr if needed, and downmixes to mono."""
     signal, fs = sf.read(audio_path)
     if signal.ndim > 1:
         signal = signal.mean(axis=1)
+    if target_sr is not None and fs != target_sr:
+        signal = librosa.resample(signal, orig_sr=fs, target_sr=target_sr)
+        fs = target_sr
     max_val = np.max(np.abs(signal))
     if max_val > 0:
         signal = signal / max_val
