@@ -16,6 +16,7 @@ import json
 import glob
 import time
 import urllib.parse
+import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import soundfile as sf
 import numpy as np
